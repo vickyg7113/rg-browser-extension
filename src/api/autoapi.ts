@@ -16,32 +16,25 @@ export const checkAppIntegration = async (
   localStorage?: Record<string, any>,
   integration?: string
 ): Promise<any> => {
-  try {
-    const payload: Record<string, any> = {};
-    
-    if (pathname) {
-      payload.pathname = pathname;
-    }
-    if (url) {
-      payload.url = url;
-    }
-    if (localStorage) {
-      payload.localStorage = localStorage;
-    }
-    if (integration) {
-      payload.integration = integration;
-    }
-
-    const response = await apiClient.post(
-      `${MC_ADMIN_URL}${AUTO_API}/integrations/verify-account`,
-      payload
-    );
-
-    // Return data as-is from the API
-    return response.data;
-  } catch (error) {
-    console.error('[checkAppIntegration] Error checking app integration:', error);
-    // Throw error to be handled by the caller
-    throw error;
+  const payload: Record<string, any> = {};
+  
+  if (pathname) {
+    payload.pathname = pathname;
   }
+  if (url) {
+    payload.url = url;
+  }
+  if (localStorage) {
+    payload.localStorage = localStorage;
+  }
+  if (integration) {
+    payload.integration = integration;
+  }
+
+  const { data } = await apiClient.post(
+    `${MC_ADMIN_URL}${AUTO_API}/integrations/verify-account`,
+    payload
+  );
+
+  return data;
 };

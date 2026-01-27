@@ -178,10 +178,11 @@ apiClient.interceptors.request.use(
         config.headers.Authorization = `Bearer ${accessToken}`;
       }
       
-      // Get RGSelectedRole
+      // Get RGSelectedRole and format it (replace spaces with underscores)
       const role = await getRGSelectedRole();
       if (role && config.headers) {
-        config.headers['Role'] = role;
+        const formattedRole = role.replace(/\s+/g, '_');
+        config.headers['Role'] = formattedRole;
       }
       
       // Get iud (user identifier)

@@ -166,12 +166,15 @@ export const ChatInterface: React.FC = () => {
     },
   });
 
+  console.log('[ChatInterface] Integration Data:', integrationData);
+
   // Check if account exists based on response
+  // If exists is a boolean, return it; otherwise return false
   const isAppIntegrated =
     typeof integrationData?.exists === 'boolean'
       ? integrationData.exists
-      : null;
-  const isCheckingIntegration = isIntegrationLoading && isAppIntegrated === null;
+      : false;
+  const isCheckingIntegration = isIntegrationLoading && integrationData === undefined;
 
   // React Query mutation for creating view from query
   const createViewMutation = useMutation({
@@ -1129,7 +1132,7 @@ export const ChatInterface: React.FC = () => {
   // Show Switch Profile section only if there are multiple roles and at least one alternative role
   const showSwitchProfiles = rawRoles.length > 1 && alternativeRoles.length > 0;
 
-  if (loading || (isAuthenticated && isCheckingIntegration && isAppIntegrated === null)) {
+  if (loading || (isAuthenticated && isCheckingIntegration)) {
     return (
       <div className="flex flex-col h-screen bg-white items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
