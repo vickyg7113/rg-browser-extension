@@ -29,7 +29,7 @@ chrome.runtime.onMessage.addListener((
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   } else if (request.type === 'GET_TAB_INFO') {
-    // Get tab info - can specify tabId or use current active tab
+    // Get tab info - can specify tabId or use the tab that has the sidepanel open
     const targetTabId = request.tabId;
     
     if (targetTabId) {
@@ -48,17 +48,57 @@ chrome.runtime.onMessage.addListener((
         sendResponse({ success: false, error: error.message });
       });
     } else {
-      // Get current active tab
+      // Get active tab in the CURRENT window (where sidepanel is open), excluding login domain and extension pages
+      // This ensures we get the tab from the window where the extension was opened, not other windows
       chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
         if (!tabs[0]?.id || !tabs[0]?.url) {
           sendResponse({ success: false, error: 'Could not access current tab' });
           return;
         }
-        fetchTabInfo(tabs[0]).then((info) => {
-          sendResponse({ success: true, data: info });
-        }).catch((error) => {
-          sendResponse({ success: false, error: error.message });
-        });
+        
+        const activeTab = tabs[0];
+        const rgdevHostname = new URL(RGDEV_URL).hostname;
+        
+        // If the active tab is the login domain or extension page, try to find another tab in the same window
+        if (activeTab.url && (
+          activeTab.url.startsWith('chrome-extension://') ||
+          activeTab.url.startsWith('chrome://') ||
+          activeTab.url.includes(rgdevHostname)
+        )) {
+          // Get all tabs in the current window and find a non-login, non-extension tab
+          chrome.tabs.query({ currentWindow: true }).then((allTabs) => {
+            const mainTab = allTabs.find(tab => 
+              tab.url && 
+              !tab.url.startsWith('chrome-extension://') &&
+              !tab.url.startsWith('chrome://') &&
+              !tab.url.includes(rgdevHostname) &&
+              (tab.url.startsWith('http://') || tab.url.startsWith('https://'))
+            );
+            
+            const targetTab = mainTab || activeTab;
+            
+            if (!targetTab?.id || !targetTab?.url) {
+              sendResponse({ success: false, error: 'Could not access main tab' });
+              return;
+            }
+            fetchTabInfo(targetTab).then((info) => {
+              sendResponse({ success: true, data: info });
+            }).catch((error) => {
+              sendResponse({ success: false, error: error.message });
+            });
+          }).catch((error) => {
+            sendResponse({ success: false, error: error.message });
+          });
+        } else {
+          // Active tab is valid, use it
+          fetchTabInfo(activeTab).then((info) => {
+            sendResponse({ success: true, data: info });
+          }).catch((error) => {
+            sendResponse({ success: false, error: error.message });
+          });
+        }
+      }).catch((error) => {
+        sendResponse({ success: false, error: error.message });
       });
     }
     return true; // Keep channel open for async response

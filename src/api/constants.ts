@@ -2,8 +2,9 @@
  * API Constants
  * Centralized constants for API endpoints
  */
-
+export const MC_ADMIN_URL = '/mc-admin-api';
 export const PREFIX_WINGMAN = '/wingman';
+export const AUTO_API = '/autoapi';
 
 /**
  * Account Summary Query Configuration

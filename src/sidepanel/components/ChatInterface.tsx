@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Icon } from '@iconify/react';
-import { Menu, FileText, Download, Eye, MessageCircle } from 'lucide-react';
+import { FileText, Download, Eye } from 'lucide-react';
 import logoIcon from '../../icons/rg_blue_logo.png';
-import wingmanIcon from '../../icons/wingman-new.svg';
-import { createViewFromQuery, fetchQueryResult, checkTaskStatus, checkAppIntegration } from '../../api/wingman';
+import { createViewFromQuery, fetchQueryResult, checkTaskStatus } from '../../api/wingman';
+import { checkAppIntegration } from '../../api/autoapi';
 import { ACCOUNT_SUMMARY_QUERY } from '../../api/constants';
 import { getStreamingService } from '../../api/streamingService';
 import { RGDEV_URL, API_BASE_URL } from '@/constants/env';
@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/lib/use-toast';
+import { Header } from './Header';
 
 interface AuthTokens {
   RGAuth?: {
@@ -138,6 +139,8 @@ export const ChatInterface: React.FC = () => {
         favIconUrl: tabData.favIconUrl as string | undefined,
         hostname: tabData.hostname as string,
         url: tabData.url as string,
+        pathname: tabData.pathname as string | undefined,
+        localStorage: tabData.localStorage as Record<string, any> | undefined,
       };
     },
   });
@@ -147,19 +150,26 @@ export const ChatInterface: React.FC = () => {
     data: integrationData,
     isLoading: isIntegrationLoading,
   } = useQuery({
-    queryKey: ['app-integration', tabInfo?.hostname],
-    enabled: isAuthenticated && !!tabInfo?.hostname,
+    queryKey: ['app-integration', tabInfo?.url, tabInfo?.pathname],
+    enabled: isAuthenticated && !!tabInfo?.url,
     queryFn: async () => {
-      if (!tabInfo?.hostname) {
-        return { integrated: true };
+      if (!tabInfo) {
+        return { exists: false };
       }
-      return await checkAppIntegration(tabInfo.hostname);
+
+      return await checkAppIntegration(
+        tabInfo.pathname,
+        tabInfo.url,
+        tabInfo.localStorage,
+        undefined // integration type - can be passed if needed
+      );
     },
   });
 
+  // Check if account exists based on response
   const isAppIntegrated =
-    typeof integrationData?.integrated === 'boolean'
-      ? integrationData.integrated
+    typeof integrationData?.exists === 'boolean'
+      ? integrationData.exists
       : null;
   const isCheckingIntegration = isIntegrationLoading && isAppIntegrated === null;
 
@@ -196,6 +206,10 @@ export const ChatInterface: React.FC = () => {
     const messageListener = (message: any) => {
       if (message.type === 'LOGIN_SUCCESS') {
         checkAuthStatus();
+        // After login, refetch tab info to get the correct tab (not the login popup)
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ['tab-info'] });
+        }, 500);
       } else if (message.type === 'TAB_CHANGED' || message.type === 'TAB_UPDATED') {
         // Invalidate tab info when the active tab changes
         queryClient.invalidateQueries({ queryKey: ['tab-info'] });
@@ -1166,28 +1180,22 @@ export const ChatInterface: React.FC = () => {
     );
   }
 
-  // If the user is authenticated but the current app is not integrated with Revgain,
-  // show an integration prompt screen instead of the chat interface.
-  if (isAuthenticated && isAppIntegrated === false) {
-    const autoApiAdminUrl = `${RGDEV_URL.replace(/\/$/, '')}/admin/autoapi`;
+  // For authenticated users, render the common layout (Header + Sheet),
+  // and switch the main content based on integration status.
+  const autoApiAdminUrl = `${RGDEV_URL.replace(/\/$/, '')}/admin/autoapi_3.0`;
 
-    return (
-      <div className="flex flex-col h-screen bg-white">
-        {/* Header */}
-        <div className="border-b border-gray-200 bg-gray-50 px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <img
-                src={wingmanIcon}
-                alt="Wingman"
-                className="w-8 h-8"
-              />
-              <span className="font-medium text-[#222222]">Wingman</span>
-            </div>
-          </div>
-        </div>
+  return (
+    <div className="flex flex-col h-screen bg-white">
+      {/* Common Header */}
+      <Header 
+        showTabInfo={true}
+        tabInfo={tabInfo}
+        onMenuClick={() => setShowProfileSidebar(true)}
+      />
 
-        {/* Not integrated content */}
+      {/* Main Content */}
+      {isAppIntegrated === false ? (
+        // Not integrated content
         <div className="flex-1 flex items-center justify-center px-6">
           <div className="max-w-md w-full text-center space-y-4">
             {/* App icon + name */}
@@ -1224,151 +1232,102 @@ export const ChatInterface: React.FC = () => {
                 href={autoApiAdminUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center justify-center px-4 py-2 rounded-md text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 transition-colors"
+                className="inline-flex items-center justify-center px-4 py-2 rounded-[48px] text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 transition-colors"
               >
                 Configure integration in Revgain
               </a>
             </div>
           </div>
         </div>
-      </div>
-    );
-  }
-
-  // Show chat interface if authenticated
-  return (
-    <div className="flex flex-col h-screen bg-white">
-      {/* Header with User Name */}
-      <div className="border-b border-gray-200 bg-gray-50 px-4 py-3 relative">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <img 
-              src={wingmanIcon} 
-              alt="Wingman" 
-              className="w-8 h-8"
-            />
-            <span className="font-medium text-[#222222]">Wingman</span>
-          </div>
-          <div className="flex items-center gap-2">
-            {tabInfo && (
-              <>
-                {/* Green dot indicator */}
-                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                {/* Website icon */}
-                {tabInfo.favIconUrl ? (
-                  <img 
-                    src={tabInfo.favIconUrl} 
-                    alt={tabInfo.title}
-                    className="w-5 h-5"
-                    onError={(e) => {
-                      // Fallback if favicon fails to load
-                      (e.target as HTMLImageElement).style.display = 'none';
-                    }}
-                  />
-                ) : (
-                  <div className="w-5 h-5 bg-gray-300 rounded"></div>
-                )}
-                {/* Website name */}
-                {/* <span className="text-sm font-medium text-gray-700 max-w-[150px] truncate">
-                  {tabInfo.title}
-                </span> */}
-              </>
-            )}
-            <button
-              onClick={() => setShowProfileSidebar(true)}
-              className="text-gray-500 hover:text-gray-700 p-1 rounded hover:bg-gray-100 transition-colors"
-              title="Menu"
-            >
-              <Menu className="w-6 h-6" />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-gray-500">
-            <Icon icon="material-symbols:chat-bubble-outline" className="w-12 h-12 mb-4" />
-            <p className="text-lg font-medium">Start a conversation</p>
-            <p className="text-sm">Ask me anything about your revenue insights</p>
-          </div>
-        ) : (
-          messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div
-                className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                  message.role === 'user'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-50 text-gray-900'
-                }`}
-              >
-                {message.role === 'user' ? (
-                  <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                ) : (
-                  renderAssistantMessage(message)
-                )}
+      ) : (
+        // Chat interface content
+        <>
+          {/* Messages Area */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {messages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                <Icon icon="material-symbols:chat-bubble-outline" className="w-12 h-12 mb-4" />
+                <p className="text-lg font-medium">Start a conversation</p>
+                <p className="text-sm">Ask me anything about your revenue insights</p>
               </div>
-            </div>
-          ))
-        )}
-      </div>
-
-      {/* Input Area */}
-      <div className="border-t border-gray-200 bg-white p-4">
-        {/* Customer Account ID Input */}
-        <div className="mb-3">
-          <label htmlFor="customer-account-id" className="block text-xs font-medium text-gray-700 mb-1">
-            Customer Account ID
-          </label>
-          <input
-            id="customer-account-id"
-            type="text"
-            value={customerAccountId}
-            onChange={(e) => setCustomerAccountId(e.target.value)}
-            placeholder="Enter customer account ID (e.g., 1001)"
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          />
-        </div>
-        
-        <form onSubmit={handleSendMessage} className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 py-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Type your message..."
-            className="flex-1 px-2 py-2 bg-transparent border-none outline-none text-sm text-gray-900 placeholder-gray-500"
-          />
-          <button
-            type="submit"
-            disabled={!input.trim() || createViewMutation.isPending}
-            className="w-8 h-8 bg-gray-100 hover:bg-gray-200 rounded-full flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
-          >
-            {createViewMutation.isPending ? (
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
             ) : (
-              <Icon icon="material-symbols:send-rounded" className="w-5 h-5 text-gray-600" />
+              messages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-[80%] rounded-lg px-4 py-2 ${
+                      message.role === 'user'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-50 text-gray-900'
+                    }`}
+                  >
+                    {message.role === 'user' ? (
+                      <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                    ) : (
+                      renderAssistantMessage(message)
+                    )}
+                  </div>
+                </div>
+              ))
             )}
-          </button>
-        </form>
-        {/* Account Summary Button */}
-        {customerAccountId.trim() && (
-          <div className="mt-3 flex justify-center">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleAccountSummaryClick}
-              disabled={isProcessing}
-              className="text-sm bg-gray-100 hover:bg-gray-200 cursor-pointer"
-            >
-              {isProcessing ? 'Processing...' : 'Account Summary'}
-            </Button>
           </div>
-        )}
-      </div>
+
+          {/* Input Area */}
+          <div className="border-t border-gray-200 bg-white p-4">
+            {/* Customer Account ID Input */}
+            <div className="mb-3">
+              <label htmlFor="customer-account-id" className="block text-xs font-medium text-gray-700 mb-1">
+                Customer Account ID
+              </label>
+              <input
+                id="customer-account-id"
+                type="text"
+                value={customerAccountId}
+                onChange={(e) => setCustomerAccountId(e.target.value)}
+                placeholder="Enter customer account ID (e.g., 1001)"
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+            
+            <form onSubmit={handleSendMessage} className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 py-2">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Type your message..."
+                className="flex-1 px-2 py-2 bg-transparent border-none outline-none text-sm text-gray-900 placeholder-gray-500"
+              />
+              <button
+                type="submit"
+                disabled={!input.trim() || createViewMutation.isPending}
+                className="w-8 h-8 bg-gray-100 hover:bg-gray-200 rounded-full flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+              >
+                {createViewMutation.isPending ? (
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
+                ) : (
+                  <Icon icon="material-symbols:send-rounded" className="w-5 h-5 text-gray-600" />
+                )}
+              </button>
+            </form>
+            {/* Account Summary Button */}
+            {customerAccountId.trim() && (
+              <div className="mt-3 flex justify-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleAccountSummaryClick}
+                  disabled={isProcessing}
+                  className="text-sm bg-gray-100 hover:bg-gray-200 cursor-pointer"
+                >
+                  {isProcessing ? 'Processing...' : 'Account Summary'}
+                </Button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       {/* Profile Sidebar Sheet */}
       <Sheet open={showProfileSidebar} onOpenChange={setShowProfileSidebar}>
