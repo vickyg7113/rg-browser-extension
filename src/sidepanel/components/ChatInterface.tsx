@@ -4,7 +4,7 @@ import { Icon } from '@iconify/react';
 import { FileText, Download, Eye } from 'lucide-react';
 import logoIcon from '../../icons/rg_blue_logo.png';
 import { createViewFromQuery, fetchQueryResult, checkTaskStatus } from '../../api/wingman';
-import { checkAppIntegration } from '../../api/autoapi';
+// import { checkAppIntegration } from '../../api/autoapi';
 import { ACCOUNT_SUMMARY_QUERY } from '../../api/constants';
 import { getStreamingService } from '../../api/streamingService';
 import { RGDEV_URL, API_BASE_URL } from '@/constants/env';
@@ -84,8 +84,8 @@ export const ChatInterface: React.FC = () => {
   const [formattedUserRole, setFormattedUserRole] = useState<string>('');
   const [alternativeRoles, setAlternativeRoles] = useState<string[]>([]);
   const [rawRoles, setRawRoles] = useState<string[]>([]);
-  // Customer account ID - manually set via text input
-  const [customerAccountId, setCustomerAccountId] = useState<string>('');
+  // Customer account ID – removed; input is text-only via handleSendMessage
+  // const [customerAccountId, setCustomerAccountId] = useState<string>('');
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentQuery, setCurrentQuery] = useState<{
@@ -145,61 +145,38 @@ export const ChatInterface: React.FC = () => {
     },
   });
 
-  // App integration via React Query (depends on tabInfo)
-  const {
-    data: integrationData,
-    isLoading: isIntegrationLoading,
-  } = useQuery({
-    queryKey: ['app-integration', tabInfo?.url, tabInfo?.pathname],
-    enabled: isAuthenticated && !!tabInfo?.url,
-    queryFn: async () => {
-      if (!tabInfo) {
-        return { exists: false };
-      }
+  // App integration check disabled – show chat interface directly
+  // const {
+  //   data: integrationData,
+  //   isLoading: isIntegrationLoading,
+  // } = useQuery({
+  //   queryKey: ['app-integration', tabInfo?.url, tabInfo?.pathname],
+  //   enabled: isAuthenticated && !!tabInfo?.url,
+  //   queryFn: async () => {
+  //     if (!tabInfo) {
+  //       return { exists: false };
+  //     }
+  //     return await checkAppIntegration(
+  //       tabInfo.pathname,
+  //       tabInfo.url,
+  //       tabInfo.localStorage,
+  //       undefined
+  //     );
+  //   },
+  // });
+  // console.log('[ChatInterface] Integration Data:', integrationData);
+  // const isAppIntegrated =
+  //   typeof integrationData?.exists === 'boolean'
+  //     ? integrationData.exists
+  //     : false;
+  // const isCheckingIntegration = isIntegrationLoading && integrationData === undefined;
 
-      return await checkAppIntegration(
-        tabInfo.pathname,
-        tabInfo.url,
-        tabInfo.localStorage,
-        undefined // integration type - can be passed if needed
-      );
-    },
-  });
-
-  console.log('[ChatInterface] Integration Data:', integrationData);
-
-  // Check if account exists based on response
-  // If exists is a boolean, return it; otherwise return false
-  const isAppIntegrated =
-    typeof integrationData?.exists === 'boolean'
-      ? integrationData.exists
-      : false;
-  const isCheckingIntegration = isIntegrationLoading && integrationData === undefined;
-
-  // React Query mutation for creating view from query
-  const createViewMutation = useMutation({
-    mutationFn: (userQuery: string) => createViewFromQuery(userQuery),
-    onSuccess: (data) => {
-      console.log('[ChatInterface] API Response:', data);
-      // You can add assistant message here with the response
-      const assistantMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant' as const,
-        content: `View created successfully! Response: ${JSON.stringify(data, null, 2)}`
-      };
-      setMessages(prev => [...prev, assistantMessage]);
-    },
-    onError: (error: any) => {
-      console.error('[ChatInterface] API Error:', error);
-      const errorMessage = error?.response?.data?.message || error?.message || 'An error occurred';
-      const assistantMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant' as const,
-        content: `Error: ${errorMessage}`
-      };
-      setMessages(prev => [...prev, assistantMessage]);
-    },
-  });
+  // createViewMutation commented out – free-flow messages go via fetchQueryResult + streaming
+  // const createViewMutation = useMutation({
+  //   mutationFn: (userQuery: string) => createViewFromQuery(userQuery),
+  //   onSuccess: (data) => { ... },
+  //   onError: (error: any) => { ... },
+  // });
 
   useEffect(() => {
     // Check for existing tokens on mount
@@ -308,19 +285,78 @@ export const ChatInterface: React.FC = () => {
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     const message = input.trim();
-    if (!message || !isAuthenticated) return;
+    if (!message || !isAuthenticated || isProcessing) return;
+
+    const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const processingMessageId = `${messageId}-processing`;
 
     // Add user message
     const userMessage = {
-      id: Date.now().toString(),
+      id: messageId,
       role: 'user' as const,
       content: message
     };
     setMessages(prev => [...prev, userMessage]);
     setInput('');
+    setIsProcessing(true);
 
-    // Trigger API call using React Query mutation
-    createViewMutation.mutate(message);
+    // Add processing (assistant) message
+    const processingMessage: ChatMessage = {
+      id: processingMessageId,
+      role: 'assistant' as const,
+      status: 'thinking',
+      content: '',
+      result: JSON.stringify({ status: 'thinking', message: '' })
+    };
+    setMessages(prev => [...prev, processingMessage]);
+    activeMessageIdRef.current = processingMessageId;
+
+    try {
+      const result = await fetchQueryResult(
+        '', // no query_id for free-flow
+        sessionId,
+        {},
+        message // custom_query
+      );
+
+      let resultData = result?.success && result?.data ? result.data : result;
+
+      const isStreaming = handleQueryResultWithStreaming(
+        resultData,
+        processingMessageId,
+        sessionId,
+        {}
+      );
+
+      if (!isStreaming) {
+        setIsProcessing(false);
+      }
+
+      let taskId = resultData?.task_id;
+      if (!taskId && resultData?.result) {
+        try {
+          const parsed = typeof resultData.result === 'string' ? JSON.parse(resultData.result) : resultData.result;
+          taskId = parsed?.task_id;
+        } catch (_) {}
+      }
+      if (taskId && !isStreaming) {
+        startTaskPolling(taskId, processingMessageId, sessionId);
+      }
+    } catch (error) {
+      console.error('[ChatInterface] Error sending message:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An error occurred';
+      setMessages(prev => prev.map(msg =>
+        msg.id === processingMessageId
+          ? {
+              ...msg,
+              status: 'error',
+              content: errorMessage,
+              result: JSON.stringify({ status: 'error', message: errorMessage })
+            }
+          : msg
+      ));
+      setIsProcessing(false);
+    }
   };
 
   const handleAction = (actionType: 'logout' | 'switchRole' | 'viewProfile') => {
@@ -1008,131 +1044,13 @@ export const ChatInterface: React.FC = () => {
     });
   }, []);
 
-  /**
-   * Handle Account Summary Click
-   */
-  const handleAccountSummaryClick = useCallback(async () => {
-    setIsProcessing(true);
-    
-    // Show immediate notification when request is initiated
-    toast({
-      variant: "success",
-      title: "Account Summary Requested",
-      description: "Your document will be ready in 7–10 minutes. We'll email it to you and add it to your Wingman chat history. You can continue with your other tasks in the meantime.",
-    });
-    
-    try {
-      // Check if we have customer account ID
-      if (!customerAccountId.trim()) {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "Customer account ID is required for account summary",
-        });
-        setIsProcessing(false);
-        return;
-      }
-
-      const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      
-      // Add user message
-      const userMessage = {
-        id: messageId,
-        role: 'user' as const,
-        content: ACCOUNT_SUMMARY_QUERY.title
-      };
-      setMessages(prev => [...prev, userMessage]);
-      
-      // Add processing message
-      const processingMessage: ChatMessage = {
-        id: `${messageId}-processing`,
-        role: 'assistant' as const,
-        status: 'thinking',
-        content: '',
-        result: JSON.stringify({
-          status: 'thinking',
-          message: ''
-        })
-      };
-      setMessages(prev => [...prev, processingMessage]);
-      activeMessageIdRef.current = `${messageId}-processing`;
-
-      try {
-        const result = await fetchQueryResult(
-          ACCOUNT_SUMMARY_QUERY.id,
-          sessionId,
-          { rg_customer_account_id: customerAccountId.trim() }
-        );
-
-        console.log('[ChatInterface] Account summary result:', result);
-
-        // Handle response structure - check if it has success and data
-        let resultData;
-        if (result.success && result.data) {
-          resultData = result.data;
-        } else {
-          resultData = result;
-        }
-
-        // Use streaming for account summary
-        const isStreaming = handleQueryResultWithStreaming(
-          resultData, 
-          `${messageId}-processing`, 
-          sessionId,
-          { req_params: { rg_customer_account_id: customerAccountId.trim() } }
-        );
-
-        // If streaming started, processing state will be cleared when streaming completes
-        // If not streaming, the helper already updated the message
-        if (!isStreaming) {
-          setIsProcessing(false);
-        }
-        
-        // Check if we need to start task polling for long-running operations
-        let taskId = resultData.task_id;
-        if (!taskId && resultData.result) {
-          try {
-            const parsedResult = typeof resultData.result === 'string' ? JSON.parse(resultData.result) : resultData.result;
-            taskId = parsedResult.task_id;
-          } catch (e) {
-            // Ignore parse errors
-          }
-        }
-        
-        if (taskId && !isStreaming) {
-          // Start task polling for long-running operations
-          startTaskPolling(taskId, `${messageId}-processing`, sessionId);
-        }
-
-      } catch (error) {
-        console.error('[ChatInterface] Error fetching query result:', error);
-        const errorMessage = error instanceof Error ? error.message : 'An error occurred';
-        setMessages(prev => prev.map(msg => 
-          msg.id === `${messageId}-processing`
-            ? {
-                ...msg,
-                status: 'error',
-                content: errorMessage,
-                result: JSON.stringify({
-                  status: 'error',
-                  message: errorMessage
-                })
-              }
-            : msg
-        ));
-        setIsProcessing(false);
-      }
-
-    } catch (error) {
-      console.error('[ChatInterface] Error processing account summary:', error);
-      setIsProcessing(false);
-    }
-  }, [customerAccountId, sessionId, handleQueryResultWithStreaming, startTaskPolling]);
+  /** Handle Account Summary Click – commented out (Customer Account ID removed; use free-flow message instead) */
+  // const handleAccountSummaryClick = useCallback(async () => { ... }, [customerAccountId, sessionId, handleQueryResultWithStreaming, startTaskPolling]);
 
   // Show Switch Profile section only if there are multiple roles and at least one alternative role
   const showSwitchProfiles = rawRoles.length > 1 && alternativeRoles.length > 0;
 
-  if (loading || (isAuthenticated && isCheckingIntegration)) {
+  if (loading /* || (isAuthenticated && isCheckingIntegration) */) {
     return (
       <div className="flex flex-col h-screen bg-white items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
@@ -1183,35 +1101,28 @@ export const ChatInterface: React.FC = () => {
     );
   }
 
-  // For authenticated users, render the common layout (Header + Sheet),
-  // and switch the main content based on integration status.
-  const autoApiAdminUrl = `${RGDEV_URL.replace(/\/$/, '')}/admin/autoapi_3.0`;
+  // For authenticated users, render the common layout (Header + Sheet).
+  // const autoApiAdminUrl = `${RGDEV_URL.replace(/\/$/, '')}/admin/autoapi_3.0`;
 
   return (
     <div className="flex flex-col h-screen bg-white">
       {/* Common Header */}
       <Header 
-        showTabInfo={true}
+        showTabInfo={false}
         tabInfo={tabInfo}
         onMenuClick={() => setShowProfileSidebar(true)}
       />
 
-      {/* Main Content */}
-      {isAppIntegrated === false ? (
-        // Not integrated content
+      {/* Main Content – chat shown directly (app integration check disabled) */}
+      {/* {isAppIntegrated === false ? (
         <div className="flex-1 flex items-center justify-center px-6">
           <div className="max-w-md w-full text-center space-y-4">
-            {/* App icon + name */}
             {tabInfo && (
               <div className="flex flex-col items-center gap-3">
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 bg-green-500 rounded-full" />
                   {tabInfo.favIconUrl ? (
-                    <img
-                      src={tabInfo.favIconUrl}
-                      alt={tabInfo.title}
-                      className="w-6 h-6 rounded"
-                    />
+                    <img src={tabInfo.favIconUrl} alt={tabInfo.title} className="w-6 h-6 rounded" />
                   ) : (
                     <div className="w-6 h-6 rounded bg-gray-200" />
                   )}
@@ -1221,29 +1132,21 @@ export const ChatInterface: React.FC = () => {
                 </div>
               </div>
             )}
-
             <p className="text-sm text-gray-600">
               This application is currently <span className="font-semibold">not integrated</span> with Revgain.
             </p>
-
             <p className="text-xs text-gray-500">
               To start using Wingman on this app, please integrate it with Revgain by visiting the AutoAPI configuration page.
             </p>
-
             <div className="flex justify-center">
-              <a
-                href={autoApiAdminUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center justify-center px-4 py-2 rounded-[48px] text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 transition-colors"
-              >
+              <a href={autoApiAdminUrl} target="_blank" rel="noreferrer"
+                className="inline-flex items-center justify-center px-4 py-2 rounded-[48px] text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 transition-colors">
                 Configure integration in Revgain
               </a>
             </div>
           </div>
         </div>
-      ) : (
-        // Chat interface content
+      ) : ( */}
         <>
           {/* Messages Area */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -1277,23 +1180,8 @@ export const ChatInterface: React.FC = () => {
             )}
           </div>
 
-          {/* Input Area */}
+          {/* Input Area – text only; sent as custom_query to fetchQueryResult */}
           <div className="border-t border-gray-200 bg-white p-4">
-            {/* Customer Account ID Input */}
-            <div className="mb-3">
-              <label htmlFor="customer-account-id" className="block text-xs font-medium text-gray-700 mb-1">
-                Customer Account ID
-              </label>
-              <input
-                id="customer-account-id"
-                type="text"
-                value={customerAccountId}
-                onChange={(e) => setCustomerAccountId(e.target.value)}
-                placeholder="Enter customer account ID (e.g., 1001)"
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
-            
             <form onSubmit={handleSendMessage} className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 py-2">
               <input
                 type="text"
@@ -1304,33 +1192,19 @@ export const ChatInterface: React.FC = () => {
               />
               <button
                 type="submit"
-                disabled={!input.trim() || createViewMutation.isPending}
+                disabled={!input.trim() || isProcessing}
                 className="w-8 h-8 bg-gray-100 hover:bg-gray-200 rounded-full flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
               >
-                {createViewMutation.isPending ? (
+                {isProcessing ? (
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
                 ) : (
                   <Icon icon="material-symbols:send-rounded" className="w-5 h-5 text-gray-600" />
                 )}
               </button>
             </form>
-            {/* Account Summary Button */}
-            {customerAccountId.trim() && (
-              <div className="mt-3 flex justify-center">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleAccountSummaryClick}
-                  disabled={isProcessing}
-                  className="text-sm bg-gray-100 hover:bg-gray-200 cursor-pointer"
-                >
-                  {isProcessing ? 'Processing...' : 'Account Summary'}
-                </Button>
-              </div>
-            )}
           </div>
         </>
-      )}
+      {/* )} */}
 
       {/* Profile Sidebar Sheet */}
       <Sheet open={showProfileSidebar} onOpenChange={setShowProfileSidebar}>
