@@ -24,9 +24,9 @@ export const Header: React.FC<HeaderProps> = ({
     <div className="border-b border-gray-200 bg-gray-50 px-4 py-3 relative">
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-2">
-          <img 
-            src={wingmanIcon} 
-            alt="Wingman" 
+          <img
+            src={wingmanIcon}
+            alt="Wingman"
             className="w-8 h-8"
           />
           <span className="font-medium text-[#222222]">Wingman</span>
@@ -39,8 +39,8 @@ export const Header: React.FC<HeaderProps> = ({
                 <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                 {/* Website icon */}
                 {tabInfo.favIconUrl ? (
-                  <img 
-                    src={tabInfo.favIconUrl} 
+                  <img
+                    src={tabInfo.favIconUrl}
                     alt={tabInfo.title}
                     className="w-5 h-5"
                     onError={(e) => {

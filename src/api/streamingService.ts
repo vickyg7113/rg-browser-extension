@@ -46,95 +46,121 @@ export class StreamingService {
         try {
           const data = JSON.parse(event.data);
           console.log('SSE event received:', data);
-            
-            // Handle different event types based on actual backend format
-            if (data.event_type === 'connected') {
-              // Connection confirmation event
-              if (this.messageCallback) {
-                this.messageCallback({
-                  type: 'connected',
-                  message: data.message,
-                  timestamp: data.timestamp
-                });
-              }
-            } else if (data.event_type === 'thinking') {
-              // Thinking event - show progress steps from message field
-              if (this.messageCallback) {
-                this.messageCallback({
-                  type: 'thinking',
-                  step: data.step,
-                  message: data.message, // The actual thinking message
-                  timestamp: data.timestamp
-                });
-              }
-            } else if (data.event_type === 'result') {
-              // Result event - contains data.message and data object
-              if (this.messageCallback) {
-                this.messageCallback({
-                  type: 'result',
-                  message: data.data?.message, // The result message
-                  data: data.data, // Full data object including metrics, attachments, etc.
-                  timestamp: data.timestamp
-                });
-              }
-            } else if (data.event_type === 'completed') {
-              // Completed event - contains update_result.data with full chat message
-              if (this.messageCallback) {
-                this.messageCallback({
-                  type: 'complete',
-                  status: 'completed',
-                  chatMessage: data.update_result?.data, // Full chat message to replace current one
-                  timestamp: data.timestamp
-                });
-              }
-              if (this.completeCallback) {
-                this.completeCallback();
-              }
-              this.disconnect();
-            } else if (data.event_type === 'error' || data.event_type === 'failed') {
-              // Error event
-              if (this.errorCallback) {
-                this.errorCallback({
-                  message: data.message || 'Task failed',
-                  error: data.error
-                });
-              }
-              this.disconnect();
-            } else if (data.event_type === 'chunk' || data.event_type === 'stream') {
-              // Streaming chunk event (if backend sends these)
-              if (this.messageCallback) {
-                this.messageCallback({
-                  type: 'chunk',
-                  content: data.message || data.content,
-                  timestamp: data.timestamp
-                });
-              }
-            } else if (data.event_type === 'started') {
-              // Task started event
-              if (this.messageCallback) {
-                this.messageCallback({
-                  type: 'started',
-                  message: data.message,
-                  timestamp: data.timestamp
-                });
-              }
-            } else {
-              // Generic event - pass through
-              if (this.messageCallback) {
-                this.messageCallback(data);
-              }
+
+          // Handle different event types based on actual backend format
+          if (data.event_type === 'connected') {
+            // Connection confirmation event
+            if (this.messageCallback) {
+              this.messageCallback({
+                type: 'connected',
+                message: data.message,
+                timestamp: data.timestamp
+              });
             }
+          } else if (data.event_type === 'progress') {
+            // Map progress to thinking for frontend compatibility
+            if (this.messageCallback) {
+              this.messageCallback({
+                type: 'thinking',
+                message: data.message,
+                timestamp: data.timestamp
+              });
+            }
+          } else if (data.event_type === 'thinking') {
+            // Thinking event - show progress steps from message field
+            if (this.messageCallback) {
+              this.messageCallback({
+                type: 'thinking',
+                step: data.step,
+                message: data.message, // The actual thinking message
+                timestamp: data.timestamp
+              });
+            }
+          } else if (data.event_type === 'result') {
+            // Result event - contains data.message and data object
+            if (this.messageCallback) {
+              this.messageCallback({
+                type: 'result',
+                message: data.data?.message, // The result message
+                data: data.data, // Full data object including metrics, attachments, etc.
+                timestamp: data.timestamp
+              });
+            }
+          } else if (data.event_type === 'completed') {
+            // Handle the updated response format: result is in data.data.result
+            const finalResultObject = data.data?.result;
+
+            let chatMessage = data.update_result?.data;
+
+            if (!chatMessage && finalResultObject) {
+              chatMessage = {
+                result: JSON.stringify(finalResultObject),
+                attachments: finalResultObject.attachments || [],
+                metrics: finalResultObject.metrics || [],
+                execution_summary: finalResultObject.execution_summary || data.data?.execution_summary || null,
+                datasets: finalResultObject.datasets || data.data?.datasets || null,
+                req_params: finalResultObject.req_params || data.data?.req_params || {}
+              };
+            } else if (chatMessage && typeof chatMessage.result !== 'string') {
+              chatMessage.result = JSON.stringify(chatMessage.result);
+            }
+
+            if (this.messageCallback) {
+              this.messageCallback({
+                type: 'complete',
+                status: 'completed',
+                chatMessage,
+                timestamp: data.timestamp
+              });
+            }
+            if (this.completeCallback) {
+              this.completeCallback();
+            }
+            this.disconnect();
+          } else if (data.event_type === 'error' || data.event_type === 'failed') {
+            // Error event
+            if (this.errorCallback) {
+              this.errorCallback({
+                message: data.message || 'Task failed',
+                error: data.error
+              });
+            }
+            this.disconnect();
+          } else if (data.event_type === 'chunk' || data.event_type === 'stream') {
+            // Streaming chunk event (if backend sends these)
+            if (this.messageCallback) {
+              this.messageCallback({
+                type: 'chunk',
+                content: data.message || data.content,
+                timestamp: data.timestamp
+              });
+            }
+          } else if (data.event_type === 'started') {
+            // Task started event
+            if (this.messageCallback) {
+              this.messageCallback({
+                type: 'started',
+                message: data.message,
+                timestamp: data.timestamp
+              });
+            }
+          } else {
+            // Generic event - pass through
+            if (this.messageCallback) {
+              this.messageCallback(data);
+            }
+          }
         } catch (error) {
           console.error('Error parsing SSE message:', error);
           if (this.errorCallback) {
             this.errorCallback(error);
           }
         }
-        };
+      };
 
       this.eventSource.onerror = (error) => {
         console.error('SSE error:', error);
-        
+
         // SSE automatically reconnects, but we handle errors
         if (this.eventSource?.readyState === EventSource.CLOSED) {
           console.log('SSE connection closed');
@@ -157,12 +183,12 @@ export class StreamingService {
   /**
    * Disconnect from SSE
    */
-  disconnect(): void {
+  disconnect() {
     if (this.eventSource) {
       this.eventSource.close();
       this.eventSource = null;
     }
-    
+
     this.taskId = null;
     this.messageCallback = null;
     this.errorCallback = null;

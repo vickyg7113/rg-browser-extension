@@ -31,7 +31,7 @@ chrome.runtime.onMessage.addListener((
   } else if (request.type === 'GET_TAB_INFO') {
     // Get tab info - can specify tabId or use the tab that has the sidepanel open
     const targetTabId = request.tabId;
-    
+
     if (targetTabId) {
       // Get specific tab
       chrome.tabs.get(targetTabId).then((tab) => {
@@ -55,10 +55,10 @@ chrome.runtime.onMessage.addListener((
           sendResponse({ success: false, error: 'Could not access current tab' });
           return;
         }
-        
+
         const activeTab = tabs[0];
         const rgdevHostname = new URL(RGDEV_URL).hostname;
-        
+
         // If the active tab is the login domain or extension page, try to find another tab in the same window
         if (activeTab.url && (
           activeTab.url.startsWith('chrome-extension://') ||
@@ -67,16 +67,16 @@ chrome.runtime.onMessage.addListener((
         )) {
           // Get all tabs in the current window and find a non-login, non-extension tab
           chrome.tabs.query({ currentWindow: true }).then((allTabs) => {
-            const mainTab = allTabs.find(tab => 
-              tab.url && 
+            const mainTab = allTabs.find(tab =>
+              tab.url &&
               !tab.url.startsWith('chrome-extension://') &&
               !tab.url.startsWith('chrome://') &&
               !tab.url.includes(rgdevHostname) &&
               (tab.url.startsWith('http://') || tab.url.startsWith('https://'))
             );
-            
+
             const targetTab = mainTab || activeTab;
-            
+
             if (!targetTab?.id || !targetTab?.url) {
               sendResponse({ success: false, error: 'Could not access main tab' });
               return;
@@ -128,15 +128,15 @@ chrome.runtime.onMessage.addListener((
     }).then((window) => {
       const tabId = window?.tabs?.[0]?.id;
       const windowId = window.id;
-      
+
       // Store both windowId and tabId to track the popped login window
       if (windowId && tabId) {
-        chrome.storage.local.set({ 
+        chrome.storage.local.set({
           loginWindowId: windowId,
           loginTabId: tabId
         });
       }
-      
+
       // Note: loginMonitor.js is already registered as content script in manifest
       // It will automatically run on the login page, no need to inject manually
       sendResponse({ success: true, windowId: window.id });
@@ -149,14 +149,14 @@ chrome.runtime.onMessage.addListener((
     // Verify that the message is coming from the tracked login window
     chrome.storage.local.get(['loginWindowId', 'loginTabId']).then(async (storage) => {
       const loginWindowId = storage.loginWindowId;
-      
+
       // Verify we have a tracked login window
       if (!loginWindowId) {
         console.warn('[Background] No active login window found');
         sendResponse({ success: false, error: 'No active login window found' });
         return;
       }
-      
+
       // Verify the sender window matches the login window
       // This is the most important check - the window ID should match
       if (_sender.tab?.windowId !== loginWindowId) {
@@ -164,7 +164,7 @@ chrome.runtime.onMessage.addListener((
         sendResponse({ success: false, error: 'Message not from login window' });
         return;
       }
-      
+
       // Also verify the URL is from the login domain
       const rgdevHostname = new URL(RGDEV_URL).hostname;
       if (_sender.tab?.url && !_sender.tab.url.includes(rgdevHostname)) {
@@ -172,13 +172,13 @@ chrome.runtime.onMessage.addListener((
         sendResponse({ success: false, error: 'Message not from login domain' });
         return;
       }
-      
+
       // Store tokens when login is successful
       if (request.tokens && Object.keys(request.tokens).length > 0) {
         try {
           console.log('[Background] Storing tokens from login window');
           await storeAuthTokens(request.tokens);
-          
+
           // Store customerDetails if provided
           if (request.customerDetails) {
             console.log('[Background] Storing customerDetails from login window');
@@ -187,7 +187,7 @@ chrome.runtime.onMessage.addListener((
               customerDetailsTimestamp: Date.now()
             });
           }
-          
+
           // Close the login window
           if (loginWindowId) {
             chrome.windows.remove(loginWindowId).catch((error) => {
@@ -195,13 +195,13 @@ chrome.runtime.onMessage.addListener((
               // Window might already be closed, ignore
             });
           }
-          
+
           // Clear the stored login window/tab IDs
           chrome.storage.local.remove(['loginWindowId', 'loginTabId']);
-          
+
           console.log('[Background] Login successful, tokens and customerDetails stored');
           sendResponse({ success: true });
-          
+
           // Notify sidepanel if open
           chrome.runtime.sendMessage({
             type: 'LOGIN_SUCCESS',
@@ -212,9 +212,9 @@ chrome.runtime.onMessage.addListener((
           });
         } catch (error) {
           console.error('[Background] Error storing tokens:', error);
-          sendResponse({ 
-            success: false, 
-            error: error instanceof Error ? error.message : 'Unknown error' 
+          sendResponse({
+            success: false,
+            error: error instanceof Error ? error.message : 'Unknown error'
           });
         }
       } else {
@@ -223,9 +223,9 @@ chrome.runtime.onMessage.addListener((
       }
     }).catch((error) => {
       console.error('[Background] Error processing LOGIN_SUCCESS:', error);
-      sendResponse({ 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Unknown error' 
+      sendResponse({
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
       });
     });
     return true;
@@ -233,8 +233,8 @@ chrome.runtime.onMessage.addListener((
     // Get stored auth tokens
     getAuthTokens()
       .then((tokens) => {
-      sendResponse({ success: true, data: tokens });
-    })
+        sendResponse({ success: true, data: tokens });
+      })
       .catch((error) => {
         sendResponse({ success: false, error: error.message });
       });
@@ -257,9 +257,22 @@ chrome.runtime.onMessage.addListener((
     }
     return true;
   }
-  
+
   return false;
 });
+
+/**
+ * Check if a URL is supported by the extension based on manifest permissions
+ */
+async function isUrlSupported(url: string): Promise<boolean> {
+  try {
+    // Check if the manifest has permissions for this origin
+    const origin = new URL(url).origin + '/*';
+    return await chrome.permissions.contains({ origins: [origin] });
+  } catch (error) {
+    return false;
+  }
+}
 
 /**
  * Fetch tab information (cookies, localStorage, etc.)
@@ -269,19 +282,21 @@ async function fetchTabInfo(tab: chrome.tabs.Tab): Promise<any> {
     throw new Error('Invalid tab');
   }
 
+  const isSupported = await isUrlSupported(tab.url);
   const url = new URL(tab.url);
-  
+
   // Get cookies for the domain
   const cookies = await chrome.cookies.getAll({ domain: url.hostname });
-  
-  // Get localStorage by injecting script
+
+  // Get localStorage and HTML by injecting script
   let localStorage: Record<string, string> = {};
-  let localStorageError: string | undefined;
-  
+  let htmlContent = '';
+  let scriptError: string | undefined;
+
   try {
-    // Only try to inject if it's an http/https page
+    // Only try to inject if it's an http/https page AND supported
     const protocol = url.protocol;
-    if (protocol === 'http:' || protocol === 'https:') {
+    if (isSupported && (protocol === 'http:' || protocol === 'https:')) {
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
@@ -297,15 +312,24 @@ async function fetchTabInfo(tab: chrome.tabs.Tab): Promise<any> {
           } catch (e) {
             // Cross-origin or other error
           }
-          return storage;
+
+          return {
+            storage,
+            html: document.documentElement.outerHTML
+          };
         }
       });
-      localStorage = results[0]?.result || {};
+
+      const result = results[0]?.result;
+      if (result) {
+        localStorage = result.storage || {};
+        htmlContent = result.html || '';
+      }
     }
   } catch (error) {
-    localStorageError = error instanceof Error ? error.message : 'Unknown error';
+    scriptError = error instanceof Error ? error.message : 'Unknown error';
   }
-  
+
   return {
     tabId: tab.id,
     url: tab.url,
@@ -314,6 +338,7 @@ async function fetchTabInfo(tab: chrome.tabs.Tab): Promise<any> {
     hostname: url.hostname,
     protocol: url.protocol,
     pathname: url.pathname,
+    isSupported: isSupported,
     cookies: cookies.map(c => ({
       name: c.name,
       value: c.value,
@@ -325,7 +350,8 @@ async function fetchTabInfo(tab: chrome.tabs.Tab): Promise<any> {
       expirationDate: c.expirationDate
     })),
     localStorage: localStorage,
-    localStorageError: localStorageError
+    html: htmlContent,
+    scriptError: scriptError
   };
 }
 

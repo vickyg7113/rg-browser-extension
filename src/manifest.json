@@ -11,15 +11,25 @@
     "scripting"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "*://*.hubspot.com/*",
+    "*://*.revgain.ai/*",
+    "*://*.salesforce.com/*",
+    "*://*.force.com/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["loginMonitor.js"],
+      "matches": [
+        "*://*.hubspot.com/*",
+        "*://*.revgain.ai/*",
+        "*://*.salesforce.com/*",
+        "*://*.force.com/*"
+      ],
+      "js": [
+        "loginMonitor.js"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -36,8 +46,15 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["sidepanel.html"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "sidepanel.html"
+      ],
+      "matches": [
+        "*://*.hubspot.com/*",
+        "*://*.revgain.ai/*",
+        "*://*.salesforce.com/*",
+        "*://*.force.com/*"
+      ]
     }
   ]
 }

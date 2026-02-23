@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { v4 as uuidv4 } from 'uuid';
 import { Icon } from '@iconify/react';
 import { FileText, Download, Eye } from 'lucide-react';
 import logoIcon from '../../icons/rg_blue_logo.png';
 import { createViewFromQuery, fetchQueryResult, checkTaskStatus } from '../../api/wingman';
+import { executeAgenticQuery } from '../../api/aqe';
 // import { checkAppIntegration } from '../../api/autoapi';
 import { ACCOUNT_SUMMARY_QUERY } from '../../api/constants';
 import { getStreamingService } from '../../api/streamingService';
@@ -16,6 +18,19 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
+import { transformWidgetData } from '../../utils/chartDataTransformer';
+
+// Lazy load heavy components to improve initial load time
+const ChatMessageRenderer = React.lazy(() => import('./ChatMessageRenderer').then(module => ({ default: module.ChatMessageRenderer })));
+const WidgetRouter = React.lazy(() => import('./WidgetRouter').then(module => ({ default: module.WidgetRouter })));
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { useToast } from '@/lib/use-toast';
 import { Header } from './Header';
 
@@ -74,9 +89,12 @@ export const ChatInterface: React.FC = () => {
     content: string;
     status?: 'thinking' | 'completed' | 'error';
     attachments?: string[];
+    metrics?: any[];
+    execution_summary?: any;
+    datasets?: any;
     result?: string; // JSON string for structured result
   }
-  
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [downloadingFiles, setDownloadingFiles] = useState<Set<string>>(new Set());
   const [input, setInput] = useState('');
@@ -93,7 +111,7 @@ export const ChatInterface: React.FC = () => {
     title: string;
     requiresCustomer: boolean;
   } | null>(null);
-  
+
   const queryClient = useQueryClient();
 
   // Streaming state
@@ -101,17 +119,106 @@ export const ChatInterface: React.FC = () => {
   const activeStreamingTaskRef = useRef<string | null>(null);
   const activeMessageIdRef = useRef<string | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
-  
+
   // Task polling state
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  
+
   // Session ID for account summary
-  const [sessionId] = useState<string>(() => `session-${Date.now()}`);
-  
+  const [sessionId] = useState<string>(() => uuidv4());
+
   // Toast hook
   const { toast } = useToast();
+
+  const renderTable = useCallback((data: any[]) => {
+    if (!data || data.length === 0) return <div className="text-sm text-gray-500 p-4 border rounded-lg">No data available</div>;
+    const headers = Object.keys(data[0]);
+
+    return (
+      <div className="w-full border rounded-lg overflow-hidden bg-white my-2 max-w-full">
+        <div className="overflow-x-auto w-full">
+          <Table className="w-full">
+            <TableHeader className="bg-gray-50">
+              <TableRow>
+                <TableHead className="border-r bg-gray-50 sticky left-0 z-20 w-[50px]">#</TableHead>
+                {headers.map((header, index) => (
+                  <TableHead key={index} className="border-r bg-gray-50 whitespace-nowrap min-w-[120px] max-w-[250px] text-xs uppercase tracking-wider">
+                    {header.replace(/_/g, " ")}
+                  </TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.slice(0, 10).map((row, rowIndex) => (
+                <TableRow key={rowIndex} className="hover:bg-gray-50">
+                  <TableCell className="text-xs text-gray-600 bg-gray-50 border-r font-medium sticky left-0 z-10">{rowIndex + 1}</TableCell>
+                  {headers.map((header, cellIndex) => (
+                    <TableCell key={cellIndex} className="text-sm border-r truncate max-w-[250px]" title={String(row[header] || "")}>
+                      {String(row[header] || "")}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+        <div className="px-4 py-2 bg-gray-50 border-t text-[10px] text-gray-500">
+          Showing {Math.min(data.length, 10)} of {data.length} rows. Click attachments for full data.
+        </div>
+      </div>
+    );
+  }, []);
+
+  const renderMetric = useCallback((metric: any) => {
+    try {
+      if (!metric || typeof metric !== 'object') return null;
+
+      // Handle tables separately
+      if (metric?.type === "table") return renderTable(metric?.data);
+
+      // Defensive check for response data or manual chart data
+      const hasXAxis = Array.isArray(metric.xAxis) || (metric.xAxis && Object.keys(metric.xAxis).length > 0);
+      const hasYAxes = metric.yAxes && Object.keys(metric.yAxes).length > 0;
+
+      if (!hasXAxis && !hasYAxes) {
+        console.warn("[renderMetric] Skipping empty metric:", metric.title || metric.id);
+        return null;
+      }
+
+      const chartType = metric?.type || 'line';
+      const responsePayload = {
+        data: { xAxis: metric.xAxis, yAxes: metric.yAxes },
+        meta: metric?.meta || {}
+      };
+
+      const widgetData = transformWidgetData(responsePayload, chartType) || {};
+
+      const widgetConfig = {
+        ...widgetData,
+        id: metric?.id || `metric-${chartType}-${Math.random().toString(36).substring(7)}`,
+        chartType,
+        meta: { ...(widgetData?.meta || {}), title: metric?.title || "Metric" },
+      };
+
+      console.log("[renderMetric] success:", { metric_id: metric.id, xAxisPoints: widgetData.xAxisData?.length });
+
+      return (
+        <div className="w-full mt-3 min-h-[200px] flex items-center justify-center bg-gray-50 rounded-lg">
+          <React.Suspense fallback={<div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-600"></div>}>
+            <WidgetRouter widgetConfig={widgetConfig} />
+          </React.Suspense>
+        </div>
+      );
+    } catch (error) {
+      console.error("[renderMetric] error:", error, metric);
+      return (
+        <div className="p-4 text-red-500 text-[10px] bg-red-50 rounded border border-red-100 italic">
+          Failed to render {metric?.title || 'visualization'}
+        </div>
+      );
+    }
+  }, [renderTable]);
 
   // Tab info via React Query
   const {
@@ -141,6 +248,8 @@ export const ChatInterface: React.FC = () => {
         url: tabData.url as string,
         pathname: tabData.pathname as string | undefined,
         localStorage: tabData.localStorage as Record<string, any> | undefined,
+        isSupported: tabData.isSupported as boolean,
+        html: tabData.html as string | undefined,
       };
     },
   });
@@ -212,38 +321,38 @@ export const ChatInterface: React.FC = () => {
         const tokens = response.data as AuthTokens;
         setIsAuthenticated(true);
         // Extract username from tokens - prioritize RGAuth structure
-        const name = tokens.RGAuth?.given_name || 
-                     tokens.RGAuth?.name || 
-                     tokens.user?.name || 
-                     tokens.user?.username || 
-                     tokens.name || 
-                     tokens.username || 
-                     tokens.RGAuth?.preferred_username ||
-                     tokens.user?.email || 
-                     tokens.RGAuth?.email ||
-                     tokens.email || 
-                     'User';
+        const name = tokens.RGAuth?.given_name ||
+          tokens.RGAuth?.name ||
+          tokens.user?.name ||
+          tokens.user?.username ||
+          tokens.name ||
+          tokens.username ||
+          tokens.RGAuth?.preferred_username ||
+          tokens.user?.email ||
+          tokens.RGAuth?.email ||
+          tokens.email ||
+          'User';
         setUserName(name);
-        
+
         // Get user role from tokens
         const role = tokens.RGSelectedRole || '';
         setFormattedUserRole(formatRoleName(role));
-        
+
         // Get all roles from RGAuth, excluding default roles
         const allRoles = (tokens.RGAuth?.realm_access?.roles || []).filter(
           (r: string) => r && typeof r === 'string' && !r.includes('default-roles-')
         );
-        
+
         // Store raw roles for switching
         setRawRoles(allRoles);
-        
+
         // Get alternative roles (excluding current role and super admin)
         const currentRole = role;
         const altRoles = allRoles.filter((r: string) => r !== currentRole && r !== 'rg_super_admin');
-        
+
         // Format alternative roles for display
         const formattedAltRoles = altRoles.map((r: string) => formatRoleName(r));
-        
+
         setAlternativeRoles(formattedAltRoles);
       } else {
         setIsAuthenticated(false);
@@ -261,7 +370,7 @@ export const ChatInterface: React.FC = () => {
       const response = await chrome.runtime.sendMessage({
         type: 'OPEN_LOGIN'
       });
-      
+
       if (response?.success) {
         console.log('Login window opened');
       } else {
@@ -312,11 +421,16 @@ export const ChatInterface: React.FC = () => {
     activeMessageIdRef.current = processingMessageId;
 
     try {
-      const result = await fetchQueryResult(
-        '', // no query_id for free-flow
-        sessionId,
-        {},
-        message // custom_query
+      // Construct web content context
+      const webContent = tabInfo ? {
+        title: tabInfo.title || '',
+        url: tabInfo.url || '',
+        html: tabInfo.html || ''
+      } : null;
+
+      const result = await executeAgenticQuery(
+        { query: message, sessionId },
+        webContent || {}
       );
 
       let resultData = result?.success && result?.data ? result.data : result;
@@ -337,7 +451,7 @@ export const ChatInterface: React.FC = () => {
         try {
           const parsed = typeof resultData.result === 'string' ? JSON.parse(resultData.result) : resultData.result;
           taskId = parsed?.task_id;
-        } catch (_) {}
+        } catch (_) { }
       }
       if (taskId && !isStreaming) {
         startTaskPolling(taskId, processingMessageId, sessionId);
@@ -348,11 +462,11 @@ export const ChatInterface: React.FC = () => {
       setMessages(prev => prev.map(msg =>
         msg.id === processingMessageId
           ? {
-              ...msg,
-              status: 'error',
-              content: errorMessage,
-              result: JSON.stringify({ status: 'error', message: errorMessage })
-            }
+            ...msg,
+            status: 'error',
+            content: errorMessage,
+            result: JSON.stringify({ status: 'error', message: errorMessage })
+          }
           : msg
       ));
       setIsProcessing(false);
@@ -374,27 +488,27 @@ export const ChatInterface: React.FC = () => {
   const handleRoleSwitch = (formattedRole: string) => {
     // Find the raw role that matches the formatted role
     const matchedRawRole = rawRoles.find((rawRole: string) => formatRoleName(rawRole) === formattedRole);
-    
+
     if (matchedRawRole) {
       // Get current authTokens and update RGSelectedRole within it
       chrome.storage.local.get(['authTokens'], (result) => {
         const currentTokens = result.authTokens as AuthTokens | undefined;
-        
+
         if (currentTokens) {
           // Update RGSelectedRole within authTokens object
           const updatedTokens = {
             ...currentTokens,
             RGSelectedRole: matchedRawRole
           };
-          
+
           // Store updated authTokens back
           chrome.storage.local.set({ authTokens: updatedTokens }, () => {
             setFormattedUserRole(formatRoleName(matchedRawRole));
             setShowProfileSidebar(false);
-            
+
             // Refresh auth status to update roles
             checkAuthStatus();
-            
+
             console.log('[ChatInterface] Role switched to:', matchedRawRole);
           });
         } else {
@@ -437,17 +551,17 @@ export const ChatInterface: React.FC = () => {
    */
   const ThinkingDots = () => (
     <div className="flex gap-1.5">
-      <div 
-        className="w-2 h-2 bg-gray-600 rounded-full animate-bounce" 
-        style={{ animationDelay: '0ms', animationDuration: '0.8s' }} 
+      <div
+        className="w-2 h-2 bg-gray-600 rounded-full animate-bounce"
+        style={{ animationDelay: '0ms', animationDuration: '0.8s' }}
       />
-      <div 
-        className="w-2 h-2 bg-gray-600 rounded-full animate-bounce" 
-        style={{ animationDelay: '200ms', animationDuration: '0.8s' }} 
+      <div
+        className="w-2 h-2 bg-gray-600 rounded-full animate-bounce"
+        style={{ animationDelay: '200ms', animationDuration: '0.8s' }}
       />
-      <div 
-        className="w-2 h-2 bg-gray-600 rounded-full animate-bounce" 
-        style={{ animationDelay: '400ms', animationDuration: '0.8s' }} 
+      <div
+        className="w-2 h-2 bg-gray-600 rounded-full animate-bounce"
+        style={{ animationDelay: '400ms', animationDuration: '0.8s' }}
       />
     </div>
   );
@@ -478,142 +592,39 @@ export const ChatInterface: React.FC = () => {
    * Render assistant message content
    */
   const renderAssistantMessage = useCallback((message: ChatMessage) => {
-    // Parse result if available
-    let parsedResult: any = null;
-    if (message.result) {
-      try {
-        parsedResult = JSON.parse(message.result);
-      } catch (e) {
-        // Ignore parse errors
-      }
-    }
-
-    // State 1: Loading (no message yet)
-    if (parsedResult?.status === 'thinking' && !parsedResult?.message) {
-      return (
-        <div className="flex items-center gap-2 py-3">
-          <ThinkingDots />
-        </div>
-      );
-    }
-
-    // State 2: Thinking (with progress messages)
-    if (parsedResult?.status === 'thinking' && parsedResult?.message) {
-      return (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2.5 text-[15px] font-medium text-gray-800">
-            <span>Wingman is thinking</span>
-            <ThinkingDots />
-          </div>
-          
-          <div className="text-[13px] text-gray-600 space-y-2 pl-4 border-l-2 border-gray-300">
-            {parsedResult.message.split('\n').filter((line: string) => line.trim()).map((line: string, index: number) => (
-              <div 
-                key={index} 
-                className="flex items-start gap-2.5"
-                style={{ 
-                  animation: `fadeInSlide 0.5s ease-in-out ${index * 100}ms forwards`,
-                  opacity: 0
-                }}
-              >
-                <span className="text-gray-400 mt-0.5 text-[10px]">▸</span>
-                <span className="flex-1 leading-relaxed">{line}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      );
-    }
-
-    // State 3: Error state
-    if (parsedResult?.status === 'error' || message.status === 'error') {
-      return (
-        <div className="flex items-start gap-2 text-sm text-red-600">
-          <Icon icon="lucide:alert-circle" className="w-4 h-4 shrink-0 mt-0.5" />
-          <p className="whitespace-pre-line">
-            {parsedResult?.message || message.content || 'An error occurred'}
-          </p>
-        </div>
-      );
-    }
-
-    // State 4: Final result
-    const displayMessage = parsedResult?.message || message.content || '';
-    const displayAttachments = parsedResult?.attachments || message.attachments || [];
+    // If we have a structured result, use it. Otherwise, wrap the content in a completion status.
+    const resultToRender = message.result || JSON.stringify({
+      status: message.status === 'thinking' ? 'thinking' : 'completed',
+      message: message.content,
+      attachments: message.attachments || [],
+      metrics: message.metrics || [],
+      execution_summary: message.execution_summary || null,
+      datasets: message.datasets || null
+    });
 
     return (
-      <div className="space-y-2">
-        {/* Main Message Content */}
-        {isMarkdown(displayMessage) ? (
-          <div className="text-sm text-gray-800 prose prose-sm max-w-none">
-            <div className="whitespace-pre-wrap">{displayMessage}</div>
-          </div>
-        ) : (
-          <p className="text-sm text-gray-800 whitespace-pre-line">
-            {displayMessage}
-          </p>
-        )}
-
-        {/* Attachments Section */}
-        {displayAttachments.length > 0 && (
-          <div className="flex flex-col gap-2 mt-2">
-            {displayAttachments.map((attachment: string, index: number) => {
-              const fileName = attachment.split('/').pop() || 'file';
-              const isDownloading = downloadingFiles.has(attachment);
-              
-              return (
-                <div 
-                  key={index}
-                  className={`group flex items-center gap-2 text-sm ${
-                    isDownloading ? 'text-gray-400' : 'text-gray-800'
-                  }`}
-                >
-                  <FileText className="h-4 w-4 shrink-0" />
-                  <div className="flex items-center flex-1 min-w-0">
-                    <span className="truncate font-bold">
-                      {fileName}
-                      {isDownloading && ' (Downloading...)'}
-                    </span>
-                    {!isDownloading && (
-                      <div className="flex items-center gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          onClick={() => handleFileDownload(attachment)}
-                          className="p-1 hover:bg-gray-200 rounded transition-colors"
-                          title="Download file"
-                        >
-                          <Download className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            const path = encodeURIComponent(attachment);
-                            const name = encodeURIComponent(fileName);
-                            chrome.tabs.create({ 
-                              url: `${RGDEV_URL}/DataView?path=${path}&name=${name}` 
-                            });
-                          }}
-                          className="p-1 hover:bg-gray-200 rounded transition-colors"
-                          title="View file"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      <React.Suspense fallback={<div className="p-4 space-y-2 animate-pulse"><div className="h-4 bg-gray-200 rounded w-3/4"></div><div className="h-4 bg-gray-200 rounded w-1/2"></div></div>}>
+        <ChatMessageRenderer
+          result={resultToRender}
+          isMarkdown={isMarkdown}
+          renderMetric={renderMetric}
+          downloadingFiles={downloadingFiles}
+          processingTalkToFile={new Set<string>()}
+          handleFileDownload={handleFileDownload}
+          handleTalkToFile={() => { }}
+          sessionId={sessionId}
+          enableTalkToFile={false}
+        />
+      </React.Suspense>
     );
-  }, [isMarkdown, downloadingFiles, handleFileDownload]);
+  }, [isMarkdown, downloadingFiles, handleFileDownload, renderMetric, sessionId]);
 
   // Initialize streaming service
   useEffect(() => {
     if (!streamingServiceRef.current) {
       streamingServiceRef.current = getStreamingService();
     }
-    
+
     return () => {
       // Cleanup on unmount
       if (streamingServiceRef.current && activeStreamingTaskRef.current) {
@@ -648,80 +659,70 @@ export const ChatInterface: React.FC = () => {
   useEffect(() => {
     if (taskStatus && activeMessageId && activeSessionId) {
       if (taskStatus.status === 'completed') {
-        // Task completed successfully - fetch the final result
-        // The taskStatus should contain the final chat message
-        let messageText = 'Account summary completed!';
-        let attachments: string[] = [];
-        
-        if (taskStatus.data) {
-          try {
-            const data = typeof taskStatus.data === 'string' 
-              ? JSON.parse(taskStatus.data) 
-              : taskStatus.data;
-            
-            if (data.result) {
-              const parsedResult = typeof data.result === 'string' 
-                ? JSON.parse(data.result) 
-                : data.result;
-              messageText = parsedResult.message || messageText;
-              attachments = parsedResult.attachments || data.attachments || [];
-            } else {
-              attachments = data.attachments || [];
-            }
-          } catch (e) {
-            // Use defaults
-          }
-        }
-        
-        setMessages(prev => prev.map(msg => 
-          msg.id === activeMessageId 
+        const finalData = taskStatus.data?.result || taskStatus.data || {};
+        const innerResult = finalData?.result && typeof finalData.result === 'object' ? finalData.result : finalData;
+
+        const messageText = innerResult?.message || 'Account summary completed!';
+        const attachments = innerResult?.attachments || finalData?.attachments || [];
+        const metrics = innerResult?.metrics || finalData?.metrics || [];
+        const execution_summary = finalData?.execution_summary || innerResult?.execution_summary || null;
+        const datasets = finalData?.datasets || innerResult?.datasets || null;
+
+        setMessages(prev => prev.map(msg =>
+          msg.id === activeMessageId
             ? {
-                ...msg,
+              ...msg,
+              status: 'completed',
+              content: messageText,
+              attachments,
+              metrics,
+              execution_summary,
+              datasets,
+              result: JSON.stringify({
                 status: 'completed',
-                content: messageText,
-                attachments: attachments,
-                result: JSON.stringify({
-                  status: 'completed',
-                  message: messageText,
-                  attachments: attachments
-                })
-              }
+                message: messageText,
+                attachments,
+                metrics,
+                execution_summary,
+                datasets
+              })
+            }
             : msg
         ));
-        
+
         toast({
           variant: "success",
           title: "Account Summary Ready",
           description: "Your account summary PDF has been generated and added to your chat history. You can download it from the chat or check your email.",
         });
-        
+
         // Clear active task
         setActiveTaskId(null);
         setActiveMessageId(null);
         setActiveSessionId(null);
-        
+
       } else if (taskStatus.status === 'failed') {
         // Task failed
-        setMessages(prev => prev.map(msg => 
-          msg.id === activeMessageId 
+        setMessages(prev => prev.map(msg =>
+          msg.id === activeMessageId
             ? {
-                ...msg,
+              ...msg,
+              status: 'error',
+              content: 'Account summary generation failed. Please try again later.',
+              result: JSON.stringify({
                 status: 'error',
-                content: 'Account summary generation failed. Please try again later.',
-                result: JSON.stringify({
-                  status: 'error',
-                  message: 'Account summary generation failed. Please try again later.'
-                })
-              }
+                message: 'Account summary generation failed. Please try again later.'
+              })
+            }
             : msg
         ));
-        
+
         toast({
           variant: "destructive",
           title: "Account Summary Failed",
           description: "Account summary generation failed. Please try again later.",
         });
-        
+
         // Clear active task
         setActiveTaskId(null);
         setActiveMessageId(null);
@@ -744,10 +745,10 @@ export const ChatInterface: React.FC = () => {
         if (existingIndex >= 0) {
           const existing = prev[existingIndex];
           const existingContent = existing.content || '';
-          const accumulatedMessage = existingContent 
+          const accumulatedMessage = existingContent
             ? `${existingContent}\n${newThinkingMessage}`
             : newThinkingMessage;
-          
+
           const updated = [...prev];
           updated[existingIndex] = {
             ...updated[existingIndex],
@@ -780,10 +781,10 @@ export const ChatInterface: React.FC = () => {
         if (existingIndex >= 0) {
           const existing = prev[existingIndex];
           const existingContent = existing.content || '';
-          const accumulatedMessage = existingContent 
+          const accumulatedMessage = existingContent
             ? `${existingContent}\n${resultMessage}`
             : resultMessage;
-          
+
           const updated = [...prev];
           updated[existingIndex] = {
             ...updated[existingIndex],
@@ -817,12 +818,15 @@ export const ChatInterface: React.FC = () => {
         if (Array.isArray(finalChatMessage) && finalChatMessage.length > 0) {
           finalChatMessage = finalChatMessage[0];
         }
-        
+
         // Parse the result field if it's a JSON string
         let parsedResult: any = {};
         let messageText = '';
         let attachments: string[] = [];
-        
+        let metrics: any[] = [];
+        let execution_summary: any = null;
+        let datasets: any = null;
+
         if (finalChatMessage.result) {
           try {
             if (typeof finalChatMessage.result === 'string') {
@@ -832,9 +836,12 @@ export const ChatInterface: React.FC = () => {
             }
             messageText = parsedResult.message || 'Account summary completed!';
             attachments = parsedResult.attachments || finalChatMessage.attachments || [];
+            metrics = parsedResult.metrics || finalChatMessage.metrics || [];
+            execution_summary = finalChatMessage.execution_summary || parsedResult.execution_summary || null;
+            datasets = finalChatMessage.datasets || parsedResult.datasets || null;
           } catch (e) {
-            messageText = typeof finalChatMessage.result === 'string' 
-              ? finalChatMessage.result 
+            messageText = typeof finalChatMessage.result === 'string'
+              ? finalChatMessage.result
               : 'Account summary completed!';
             attachments = finalChatMessage.attachments || [];
           }
@@ -842,24 +849,30 @@ export const ChatInterface: React.FC = () => {
           messageText = 'Account summary completed!';
           attachments = finalChatMessage.attachments || [];
         }
-        
-        setMessages(prev => prev.map(msg => 
-          msg.id === activeMessageIdRef.current 
+
+        setMessages(prev => prev.map(msg =>
+          msg.id === activeMessageIdRef.current
             ? {
-                ...msg,
+              ...msg,
+              status: 'completed',
+              content: messageText,
+              attachments: attachments,
+              metrics: metrics,
+              execution_summary: execution_summary,
+              datasets: datasets,
+              result: JSON.stringify({
                 status: 'completed',
-                content: messageText,
+                message: messageText,
                 attachments: attachments,
-                result: JSON.stringify({
-                  status: 'completed',
-                  message: messageText,
-                  attachments: attachments
-                })
-              }
+                metrics: metrics,
+                execution_summary: execution_summary,
+                datasets: datasets
+              })
+            }
             : msg
         ));
       }
-      
+
       // Stop streaming
       if (streamingServiceRef.current) {
         streamingServiceRef.current.disconnect();
@@ -906,17 +919,17 @@ export const ChatInterface: React.FC = () => {
     console.error('[ChatInterface] Streaming error:', error);
     if (activeMessageIdRef.current) {
       const errorMessage = error.message || 'An error occurred while processing your request';
-      setMessages(prev => prev.map(msg => 
-        msg.id === activeMessageIdRef.current 
+      setMessages(prev => prev.map(msg =>
+        msg.id === activeMessageIdRef.current
           ? {
-              ...msg,
+            ...msg,
+            status: 'error',
+            content: errorMessage,
+            result: JSON.stringify({
               status: 'error',
-              content: errorMessage,
-              result: JSON.stringify({
-                status: 'error',
-                message: errorMessage
-              })
-            }
+              message: errorMessage
+            })
+          }
           : msg
       ));
     }
@@ -935,16 +948,16 @@ export const ChatInterface: React.FC = () => {
     if (streamingServiceRef.current && activeStreamingTaskRef.current) {
       streamingServiceRef.current.disconnect();
     }
-    
+
     activeStreamingTaskRef.current = taskId;
     activeMessageIdRef.current = messageId;
     activeSessionIdRef.current = currentSessionId;
-    
+
     // Get streaming service instance
     if (!streamingServiceRef.current) {
       streamingServiceRef.current = getStreamingService();
     }
-    
+
     // Connect to streaming endpoint
     streamingServiceRef.current.connect(
       taskId,
@@ -974,11 +987,11 @@ export const ChatInterface: React.FC = () => {
     } catch (e) {
       resultData = result.result;
     }
-    
+
     // Check for task_id in multiple places
     const taskId = result.task_id || resultData?.task_id;
     const status = resultData?.status || 'processing';
-    
+
     // If we have a task_id, start streaming (status should be 'processing' for async tasks)
     if (taskId && (status === 'processing' || !result.result)) {
       // Start streaming with the task_id
@@ -990,17 +1003,17 @@ export const ChatInterface: React.FC = () => {
       // Parse result to extract message and attachments
       let messageText = '';
       let attachments: string[] = [];
-      
+
       if (result.result) {
         try {
-          const parsedResult = typeof result.result === 'string' 
-            ? JSON.parse(result.result) 
+          const parsedResult = typeof result.result === 'string'
+            ? JSON.parse(result.result)
             : result.result;
           messageText = parsedResult.message || 'Account summary completed!';
           attachments = parsedResult.attachments || result.attachments || [];
         } catch (e) {
-          messageText = typeof result.result === 'string' 
-            ? result.result 
+          messageText = typeof result.result === 'string'
+            ? result.result
             : 'Account summary completed!';
           attachments = result.attachments || [];
         }
@@ -1008,20 +1021,20 @@ export const ChatInterface: React.FC = () => {
         messageText = 'Account summary completed!';
         attachments = result.attachments || [];
       }
-      
-      setMessages(prev => prev.map(msg => 
-        msg.id === messageId 
+
+      setMessages(prev => prev.map(msg =>
+        msg.id === messageId
           ? {
-              ...msg,
+            ...msg,
+            status: 'completed',
+            content: messageText,
+            attachments: attachments,
+            result: JSON.stringify({
               status: 'completed',
-              content: messageText,
-              attachments: attachments,
-              result: JSON.stringify({
-                status: 'completed',
-                message: messageText,
-                attachments: attachments
-              })
-            }
+              message: messageText,
+              attachments: attachments
+            })
+          }
           : msg
       ));
       return false; // No streaming
@@ -1035,7 +1048,7 @@ export const ChatInterface: React.FC = () => {
     setActiveTaskId(taskId);
     setActiveMessageId(messageId);
     setActiveSessionId(currentSessionId);
-    
+
     // Show notification when polling starts
     toast({
       variant: "success",
@@ -1080,7 +1093,7 @@ export const ChatInterface: React.FC = () => {
               </div>
             </span>
           </div>
-          
+
           {/* Description */}
           <p className="text-sm font-medium text-gray-600 max-w-xl mx-auto leading-relaxed">
             RevGain Revenue Platform enables higher retention & expansion of your growth flywheel, with an augmented workforce of Human + AI working together.
@@ -1107,46 +1120,45 @@ export const ChatInterface: React.FC = () => {
   return (
     <div className="flex flex-col h-screen bg-white">
       {/* Common Header */}
-      <Header 
+      <Header
         showTabInfo={false}
         tabInfo={tabInfo}
         onMenuClick={() => setShowProfileSidebar(true)}
       />
 
       {/* Main Content – chat shown directly (app integration check disabled) */}
-      {/* {isAppIntegrated === false ? (
-        <div className="flex-1 flex items-center justify-center px-6">
-          <div className="max-w-md w-full text-center space-y-4">
-            {tabInfo && (
-              <div className="flex flex-col items-center gap-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 bg-green-500 rounded-full" />
-                  {tabInfo.favIconUrl ? (
-                    <img src={tabInfo.favIconUrl} alt={tabInfo.title} className="w-6 h-6 rounded" />
-                  ) : (
-                    <div className="w-6 h-6 rounded bg-gray-200" />
-                  )}
-                  <span className="text-sm font-semibold text-gray-900 truncate max-w-[200px]">
-                    {tabInfo.title}
-                  </span>
-                </div>
+      {tabInfo && tabInfo.isSupported === false ? (
+        <div className="flex-1 flex flex-col items-center justify-center px-8 text-center space-y-6">
+          <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center">
+            <Icon icon="lucide:globe" className="w-8 h-8 text-gray-400" />
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="text-xl font-semibold text-gray-900">Unsupported Site</h2>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              Wingman is currently optimized for HubSpot, Salesforce, and Revgain to provide the best revenue insights experience.
+            </p>
+          </div>
+
+          <div className="w-full max-w-xs p-4 bg-gray-50 rounded-xl border border-gray-100 space-y-3">
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">Supported Platforms</p>
+            <div className="space-y-2">
+              <div className="flex items-center gap-3 text-sm text-gray-700">
+                <Icon icon="simple-icons:hubspot" className="w-4 h-4 text-[#ff7a59]" />
+                <span>HubSpot</span>
               </div>
-            )}
-            <p className="text-sm text-gray-600">
-              This application is currently <span className="font-semibold">not integrated</span> with Revgain.
-            </p>
-            <p className="text-xs text-gray-500">
-              To start using Wingman on this app, please integrate it with Revgain by visiting the AutoAPI configuration page.
-            </p>
-            <div className="flex justify-center">
-              <a href={autoApiAdminUrl} target="_blank" rel="noreferrer"
-                className="inline-flex items-center justify-center px-4 py-2 rounded-[48px] text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 transition-colors">
-                Configure integration in Revgain
-              </a>
+              <div className="flex items-center gap-3 text-sm text-gray-700">
+                <Icon icon="simple-icons:salesforce" className="w-4 h-4 text-[#00a1e0]" />
+                <span>Salesforce</span>
+              </div>
+              <div className="flex items-center gap-3 text-sm text-gray-700">
+                <img src={logoIcon} alt="Revgain" className="w-4 h-4" />
+                <span>Revgain</span>
+              </div>
             </div>
           </div>
         </div>
-      ) : ( */}
+      ) : (
         <>
           {/* Messages Area */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -1163,11 +1175,10 @@ export const ChatInterface: React.FC = () => {
                   className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
-                    className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                      message.role === 'user'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-50 text-gray-900'
-                    }`}
+                    className={`${message.role === 'user' ? 'max-w-[80%]' : 'w-full'} rounded-lg px-4 py-2 ${message.role === 'user'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-transparent text-gray-900'
+                      }`}
                   >
                     {message.role === 'user' ? (
                       <p className="text-sm whitespace-pre-wrap">{message.content}</p>
@@ -1204,7 +1215,7 @@ export const ChatInterface: React.FC = () => {
             </form>
           </div>
         </>
-      {/* )} */}
+      )}
 
       {/* Profile Sidebar Sheet */}
       <Sheet open={showProfileSidebar} onOpenChange={setShowProfileSidebar}>
@@ -1219,7 +1230,7 @@ export const ChatInterface: React.FC = () => {
               </div>
             </div>
           </SheetHeader>
-          
+
           <div id="header-mobile-profile-content" className="overflow-y-auto h-[calc(100vh-80px)]">
             {/* User Information and Sign Out Section */}
             <div id="header-mobile-profile-top-section" className="p-[8px]">
@@ -1292,9 +1303,9 @@ export const ChatInterface: React.FC = () => {
                       }}
                     >
                       <span className="text-[14px] font-medium text-[#222222]">Profile</span>
-                      <Icon 
-                        icon="lucide:arrow-right" 
-                        className="text-[24px] text-header-avatar" 
+                      <Icon
+                        icon="lucide:arrow-right"
+                        className="text-[24px] text-header-avatar"
                       />
                     </div>
                   </div>

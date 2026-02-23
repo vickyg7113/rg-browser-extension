@@ -1,0 +1,16 @@
+src/sidepanel/components/ChatInterface.tsx(186,78): error TS2339: Property 'data' does not exist on type '{ id: any; chartType: any; meta: any; xAxisData: any; xAxisName: string; series: { name: string; data: any; type: string; color: string; }[]; legends: { name: string; color: string; }[]; }'.
+src/sidepanel/components/ChatInterface.tsx(492,34): error TS2304: Cannot find name 'RGDEV_URL'.
+src/sidepanel/components/ChatInterface.tsx(544,30): error TS2304: Cannot find name 'API_BASE_URL'.
+src/sidepanel/components/ChatInterface.tsx(1173,8): error TS2552: Cannot find name 'Sheet'. Did you mean 'Set'?
+src/sidepanel/components/ChatInterface.tsx(1174,10): error TS2304: Cannot find name 'SheetContent'.
+src/sidepanel/components/ChatInterface.tsx(1175,12): error TS2304: Cannot find name 'SheetHeader'.
+src/sidepanel/components/ChatInterface.tsx(1178,18): error TS2304: Cannot find name 'SheetTitle'.
+src/sidepanel/components/ChatInterface.tsx(1178,121): error TS2304: Cannot find name 'SheetTitle'.
+src/sidepanel/components/ChatInterface.tsx(1179,18): error TS2304: Cannot find name 'SheetDescription'.
+src/sidepanel/components/ChatInterface.tsx(1181,19): error TS2304: Cannot find name 'SheetDescription'.
+src/sidepanel/components/ChatInterface.tsx(1184,13): error TS2304: Cannot find name 'SheetHeader'.
+src/sidepanel/components/ChatInterface.tsx(1195,18): error TS2304: Cannot find name 'Button'.
+src/sidepanel/components/ChatInterface.tsx(1199,29): error TS7006: Parameter 'e' implicitly has an 'any' type.
+src/sidepanel/components/ChatInterface.tsx(1206,19): error TS2304: Cannot find name 'Button'.
+src/sidepanel/components/ChatInterface.tsx(1268,11): error TS2304: Cannot find name 'SheetContent'.
+src/sidepanel/components/ChatInterface.tsx(1269,9): error TS2552: Cannot find name 'Sheet'. Did you mean 'Set'?

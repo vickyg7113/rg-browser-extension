@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import { Button } from '@/components/ui/button';
 import { useMutation } from '@tanstack/react-query';
 import { fetchQueryResult } from '../../api/wingman';
@@ -24,9 +25,9 @@ export const AccountSummaryButton: React.FC<AccountSummaryButtonProps> = ({
   onStreamingMessage,
   onStreamingComplete
 }) => {
-  const [sessionId] = useState<string>(() => `session-${Date.now()}`);
+  const [sessionId] = useState<string>(() => uuidv4());
   const [isProcessing, setIsProcessing] = useState(false);
-  
+
   // Streaming state
   const streamingServiceRef = useRef<ReturnType<typeof getStreamingService> | null>(null);
   const activeStreamingTaskRef = useRef<string | null>(null);
@@ -37,7 +38,7 @@ export const AccountSummaryButton: React.FC<AccountSummaryButtonProps> = ({
     if (!streamingServiceRef.current) {
       streamingServiceRef.current = getStreamingService();
     }
-    
+
     return () => {
       // Cleanup on unmount
       if (streamingServiceRef.current && activeStreamingTaskRef.current) {
@@ -54,20 +55,20 @@ export const AccountSummaryButton: React.FC<AccountSummaryButtonProps> = ({
     if (event.type === 'thinking') {
       // Accumulate thinking steps
       const newThinkingMessage = event.message || event.step || '';
-      streamingMessageRef.current = streamingMessageRef.current 
+      streamingMessageRef.current = streamingMessageRef.current
         ? `${streamingMessageRef.current}\n${newThinkingMessage}`
         : newThinkingMessage;
-      
+
       if (onStreamingMessage) {
         onStreamingMessage(streamingMessageRef.current);
       }
     } else if (event.type === 'result') {
       // Partial result received
       const resultMessage = event.message || event.data?.message || 'Processing...';
-      streamingMessageRef.current = streamingMessageRef.current 
+      streamingMessageRef.current = streamingMessageRef.current
         ? `${streamingMessageRef.current}\n${resultMessage}`
         : resultMessage;
-      
+
       if (onStreamingMessage) {
         onStreamingMessage(streamingMessageRef.current);
       }
@@ -78,7 +79,7 @@ export const AccountSummaryButton: React.FC<AccountSummaryButtonProps> = ({
         if (Array.isArray(finalChatMessage) && finalChatMessage.length > 0) {
           finalChatMessage = finalChatMessage[0];
         }
-        
+
         if (onStreamingComplete) {
           onStreamingComplete(finalChatMessage);
         }
@@ -86,7 +87,7 @@ export const AccountSummaryButton: React.FC<AccountSummaryButtonProps> = ({
           onSuccess(finalChatMessage);
         }
       }
-      
+
       // Stop streaming
       if (streamingServiceRef.current) {
         streamingServiceRef.current.disconnect();
@@ -125,14 +126,14 @@ export const AccountSummaryButton: React.FC<AccountSummaryButtonProps> = ({
     if (streamingServiceRef.current && activeStreamingTaskRef.current) {
       streamingServiceRef.current.disconnect();
     }
-    
+
     activeStreamingTaskRef.current = taskId;
-    
+
     // Get streaming service instance
     if (!streamingServiceRef.current) {
       streamingServiceRef.current = getStreamingService();
     }
-    
+
     // Connect to streaming endpoint
     streamingServiceRef.current.connect(
       taskId,
@@ -160,11 +161,11 @@ export const AccountSummaryButton: React.FC<AccountSummaryButtonProps> = ({
     } catch (e) {
       resultData = result.result;
     }
-    
+
     // Check for task_id in multiple places
     const taskId = result.task_id || resultData?.task_id;
     const status = resultData?.status || 'processing';
-    
+
     // If we have a task_id, start streaming (status should be 'processing' for async tasks)
     if (taskId && (status === 'processing' || !result.result)) {
       // Start streaming with the task_id
@@ -200,7 +201,7 @@ export const AccountSummaryButton: React.FC<AccountSummaryButtonProps> = ({
     },
     onSuccess: (response) => {
       console.log('[AccountSummary] API Response:', response);
-      
+
       // Handle response structure - check if it has success and data
       let result;
       if (response.success && response.data) {
@@ -208,7 +209,7 @@ export const AccountSummaryButton: React.FC<AccountSummaryButtonProps> = ({
       } else {
         result = response;
       }
-      
+
       // Check for streaming and handle accordingly
       const isStreaming = handleQueryResultWithStreaming(result, {
         req_params: { rg_customer_account_id: customerAccountId }
@@ -237,11 +238,11 @@ export const AccountSummaryButton: React.FC<AccountSummaryButtonProps> = ({
 
     // Reset streaming message
     streamingMessageRef.current = '';
-    
+
     // Show immediate feedback
     console.log('[AccountSummary] Requesting account summary...');
     setIsProcessing(true);
-    
+
     // Trigger the mutation
     accountSummaryMutation.mutate();
   };

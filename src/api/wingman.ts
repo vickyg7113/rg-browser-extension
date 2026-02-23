@@ -1,5 +1,5 @@
 import apiClient from '../services/apiClient';
-import { PREFIX_WINGMAN } from './constants';
+import { PREFIX_WINGMAN, PREFIX_DB_INSTANCE, PREFIX_DATA_INGESTION_INSTANCE } from './constants';
 
 /**
  * Create or update a view from a user query
@@ -53,24 +53,26 @@ export const fetchQueryResult = async (
   queryId: string,
   sessionId: string,
   req_params: Record<string, any> = {},
-  customQuery?: string
+  customQuery?: string,
+  context?: Record<string, any>
 ) => {
   try {
     const payload: any = {
       session_id: sessionId,
-      req_params: req_params
+      req_params: req_params,
+      context: context || {}
     };
-    
+
     // If queryId is provided, use it
     if (queryId) {
       payload.query_id = queryId;
     }
-    
+
     // If customQuery is provided, use it
     if (customQuery) {
       payload.custom_query = customQuery;
     }
-    
+
     const response = await apiClient.post(
       `${PREFIX_WINGMAN}/account/data`,
       payload
@@ -102,3 +104,139 @@ export const checkTaskStatus = async (taskId: string) => {
   }
 };
 
+
+/**
+ * Fetch chat history for a user
+ */
+export const fetchChatHistory = async (
+  offset: number = 0,
+  limit: number = 10,
+  createdBy?: string
+) => {
+  try {
+    const payload: any = {
+      db_name: 'model_company',
+      table: 'wingman_chat_sessions',
+      include_fields: ['id', 'title', 'updated_on', 'category'],
+      limit,
+      offset,
+      order_by: [{ column: 'updated_on', direction: 'DESC' }],
+    };
+
+    if (createdBy) {
+      payload.filters = [
+        { column: 'created_by', operator: '=', value: createdBy }
+      ];
+    }
+
+    const response = await apiClient.post(`${PREFIX_DB_INSTANCE}/data/fetch`, payload);
+
+    if (response.data.success) {
+      return {
+        data: response.data.data.map((item: any) => ({
+          id: item.id,
+          title: item.title,
+          created_on: item.updated_on,
+          updated_on: item.updated_on,
+          category: item.category,
+        })),
+        hasNextPage: response.data.next_page,
+      };
+    }
+    return { data: [], hasNextPage: false };
+  } catch (error) {
+    console.error('Error fetching chat history:', error);
+    return { data: [], hasNextPage: false };
+  }
+};
+
+/**
+ * Fetch messages for a specific session
+ */
+export const fetchChatMessages = async (
+  sessionId: string,
+  offset: number = 0,
+  limit: number = 10
+) => {
+  try {
+    const response = await apiClient.post(`${PREFIX_DB_INSTANCE}/data/fetch`, {
+      db_name: 'model_company',
+      table: 'wingman_chat_history',
+      include_fields: ['id', 'created_on', 'query_id', 'custom_query', 'result', 'req_params'],
+      limit,
+      offset,
+      order_by: [{ column: 'created_on', direction: 'DESC' }],
+      filters: [{ column: 'session_id', operator: '=', value: sessionId }],
+    });
+
+    if (response.data.success) {
+      return {
+        data: response.data.data.map((item: any) => ({
+          ...item,
+          session_id: sessionId,
+        })),
+        hasNextPage: response.data.next_page,
+      };
+    }
+    return { data: [], hasNextPage: false };
+  } catch (error) {
+    console.error('Error fetching chat messages:', error);
+    return { data: [], hasNextPage: false };
+  }
+};
+
+/**
+ * Create a new chat session
+ */
+export const createChatSession = async (
+  title: string,
+  createdBy: string,
+  category: string = 'CHAT'
+) => {
+  try {
+    const { v4: uuidv4 } = await import('uuid');
+    const sessionId = uuidv4();
+
+    const response = await apiClient.post(`${PREFIX_DB_INSTANCE}/data/insert`, {
+      db_name: 'model_company',
+      table: 'wingman_chat_sessions',
+      data: {
+        id: sessionId,
+        title,
+        created_by: createdBy,
+        category,
+      },
+    });
+
+    if (response.data.success) {
+      return { sessionId, title };
+    }
+    throw new Error(response.data.message || 'Failed to create chat session');
+  } catch (error) {
+    console.error('Error creating chat session:', error);
+    throw error;
+  }
+};
+
+/**
+ * Insert a message into chat history
+ */
+export const insertChatMessage = async (sessionId: string, result: any) => {
+  try {
+    const { v4: uuidv4 } = await import('uuid');
+    const response = await apiClient.post(`${PREFIX_DB_INSTANCE}/data/insert`, {
+      db_name: 'model_company',
+      table: 'wingman_chat_history',
+      data: {
+        id: uuidv4(),
+        session_id: sessionId,
+        result: JSON.stringify(result),
+      },
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('Error inserting chat message:', error);
+    throw error;
+  }
+};
