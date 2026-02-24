@@ -81,25 +81,36 @@ export class StreamingService {
             if (this.messageCallback) {
               this.messageCallback({
                 type: 'result',
-                message: data.data?.message, // The result message
-                data: data.data, // Full data object including metrics, attachments, etc.
+                content: data.data?.message || data.message, // Use content to match WingmanContext
+                message: data.data?.message || data.message,
+                data: data.data,
                 timestamp: data.timestamp
               });
             }
           } else if (data.event_type === 'completed') {
             // Handle the updated response format: result is in data.data.result
-            const finalResultObject = data.data?.result;
+            const finalResultWrapper = data.data?.result;
+            const finalResultData = finalResultWrapper?.result || finalResultWrapper;
 
             let chatMessage = data.update_result?.data;
 
-            if (!chatMessage && finalResultObject) {
+            if (!chatMessage && finalResultWrapper) {
               chatMessage = {
-                result: JSON.stringify(finalResultObject),
-                attachments: finalResultObject.attachments || [],
-                metrics: finalResultObject.metrics || [],
-                execution_summary: finalResultObject.execution_summary || data.data?.execution_summary || null,
-                datasets: finalResultObject.datasets || data.data?.datasets || null,
-                req_params: finalResultObject.req_params || data.data?.req_params || {}
+                result: JSON.stringify({
+                  status: 'completed',
+                  message: finalResultData?.message || data.message || 'Task completed successfully',
+                  attachments: finalResultData?.attachments || finalResultWrapper?.attachments || [],
+                  metrics: finalResultData?.metrics || finalResultWrapper?.metrics || [],
+                  suggested_questions: finalResultData?.suggested_questions || finalResultWrapper?.suggested_questions || [],
+                  execution_summary: finalResultData?.execution_summary || finalResultWrapper?.execution_summary || null,
+                  datasets: finalResultData?.datasets || finalResultWrapper?.datasets || null
+                }),
+                attachments: finalResultData?.attachments || finalResultWrapper?.attachments || [],
+                metrics: finalResultData?.metrics || finalResultWrapper?.metrics || [],
+                suggested_questions: finalResultData?.suggested_questions || finalResultWrapper?.suggested_questions || [],
+                execution_summary: finalResultData?.execution_summary || finalResultWrapper?.execution_summary || null,
+                datasets: finalResultData?.datasets || finalResultWrapper?.datasets || null,
+                req_params: finalResultData?.req_params || finalResultWrapper?.req_params || {}
               };
             } else if (chatMessage && typeof chatMessage.result !== 'string') {
               chatMessage.result = JSON.stringify(chatMessage.result);

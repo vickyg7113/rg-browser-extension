@@ -3,7 +3,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { executeAgenticQuery } from '../../api/aqe';
 import { getStreamingService } from '../../api/streamingService';
 import { useToast } from '@/lib/use-toast';
-import { insertChatMessage } from '../../api/wingman';
+import { fetchChatHistory, fetchChatMessages, createChatSession, insertChatMessage } from '../../api/wingman';
+
+export const NEW_CHAT_ID = 'new-chat';
 
 export interface ChatMessage {
     id: string;
@@ -15,7 +17,18 @@ export interface ChatMessage {
     execution_summary?: any;
     datasets?: any;
     result?: string;
+    suggested_questions?: string[];
     timestamp?: string;
+}
+
+export interface HistoryItem {
+    id: string;
+    title: string;
+    created_on: string;
+    updated_on: string;
+    created_by: string;
+    updated_by: string;
+    category?: string;
 }
 
 interface WingmanContextType {
@@ -28,6 +41,13 @@ interface WingmanContextType {
     resetChat: () => void;
     updateChatMessage: (sessionId: string, messageId: string, updates: Partial<ChatMessage>) => void;
     startStreaming: (taskId: string, messageId: string, sessionId: string) => void;
+    historyData: HistoryItem[];
+    loadMoreHistory: () => Promise<void>;
+    isLoadingMore: boolean;
+    handleHistoryItemClick: (item: HistoryItem) => Promise<void>;
+    activeTabId: string | null;
+    setActiveTabId: (id: string | null) => void;
+    loadInitialHistory: () => Promise<void>;
 }
 
 const WingmanContext = createContext<WingmanContextType | undefined>(undefined);
@@ -43,11 +63,108 @@ export const useWingman = () => {
 export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
-    const [sessionId] = useState<string>(() => uuidv4());
+    const [sessionId, setSessionId] = useState<string>(() => uuidv4());
     const { toast } = useToast();
+
+    // History state
+    const [historyData, setHistoryData] = useState<HistoryItem[]>([
+        {
+            id: NEW_CHAT_ID,
+            title: "New Chat",
+            created_on: new Date().toISOString(),
+            updated_on: new Date().toISOString(),
+            created_by: "System",
+            updated_by: "System",
+        }
+    ]);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [historyOffset, setHistoryOffset] = useState(0);
+    const [hasNextPage, setHasNextPage] = useState(true);
+    const [activeTabId, setActiveTabId] = useState<string | null>(NEW_CHAT_ID);
 
     const streamingServiceRef = useRef<any>(null);
     const activeMessageIdRef = useRef<string | null>(null);
+
+    const loadInitialHistory = useCallback(async () => {
+        try {
+            const result = await fetchChatHistory(0, 10);
+            setHistoryData([
+                {
+                    id: NEW_CHAT_ID,
+                    title: "New Chat",
+                    created_on: new Date().toISOString(),
+                    updated_on: new Date().toISOString(),
+                    created_by: "System",
+                    updated_by: "System",
+                },
+                ...result.data
+            ]);
+            setHasNextPage(result.hasNextPage);
+            setHistoryOffset(10);
+        } catch (error) {
+            console.error("Error loading initial history:", error);
+        }
+    }, []);
+
+    const loadMoreHistory = useCallback(async () => {
+        if (!hasNextPage || isLoadingMore) return;
+
+        setIsLoadingMore(true);
+        try {
+            const result = await fetchChatHistory(historyOffset, 10);
+            setHistoryData(prev => [...prev, ...result.data]);
+            setHasNextPage(result.hasNextPage);
+            setHistoryOffset(prev => prev + 10);
+        } finally {
+            setIsLoadingMore(false);
+        }
+    }, [hasNextPage, isLoadingMore, historyOffset]);
+
+    const loadChatMessages = useCallback(async (sid: string) => {
+        if (sid === NEW_CHAT_ID) {
+            setMessages([]);
+            return;
+        }
+
+        try {
+            const result = await fetchChatMessages(sid);
+            // Transform history item to ChatMessage pairs
+            const transformedMessages: ChatMessage[] = [];
+
+            // Note: History items are returned in DESC order (newest first)
+            // We want to reverse them for the UI or handle as they are.
+            // In history, custom_query is the user prompt, result is the assistant response.
+            result.data.forEach((item: any) => {
+                const userMsg: ChatMessage = {
+                    id: `${item.id}-user`,
+                    role: 'user',
+                    content: item.custom_query || '',
+                    timestamp: item.created_on
+                };
+                const assistantMsg: ChatMessage = {
+                    id: `${item.id}-assistant`,
+                    role: 'assistant',
+                    content: '',
+                    status: 'completed',
+                    result: item.result,
+                    timestamp: item.created_on
+                };
+                transformedMessages.push(assistantMsg, userMsg);
+            });
+
+            setMessages(transformedMessages.reverse());
+        } catch (error) {
+            console.error("Error loading chat messages:", error);
+        }
+    }, []);
+
+    const handleHistoryItemClick = useCallback(async (item: HistoryItem) => {
+        if (isProcessing) return;
+        setActiveTabId(item.id);
+        setSessionId(item.id);
+        await loadChatMessages(item.id);
+    }, [isProcessing, loadChatMessages]);
+
 
     const updateChatMessage = useCallback((_sid: string, messageId: string, updates: Partial<ChatMessage>) => {
         setMessages(prev => prev.map(msg =>
@@ -97,6 +214,7 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
                 let metrics: any[] = [];
                 let execution_summary: any = null;
                 let datasets: any = null;
+                let suggested_questions: string[] = [];
 
                 if (finalChatMessage.result) {
                     try {
@@ -110,6 +228,7 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
                         metrics = parsedResult.metrics || finalChatMessage.metrics || [];
                         execution_summary = finalChatMessage.execution_summary || parsedResult.execution_summary || null;
                         datasets = finalChatMessage.datasets || parsedResult.datasets || null;
+                        suggested_questions = finalChatMessage.suggested_questions || parsedResult.suggested_questions || [];
                     } catch (e) {
                         messageText = typeof finalChatMessage.result === 'string'
                             ? finalChatMessage.result
@@ -131,13 +250,15 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
                             metrics: metrics,
                             execution_summary: execution_summary,
                             datasets: datasets,
+                            suggested_questions: suggested_questions,
                             result: JSON.stringify({
                                 status: 'completed',
                                 message: messageText,
                                 attachments: attachments,
                                 metrics: metrics,
                                 execution_summary: execution_summary,
-                                datasets: datasets
+                                datasets: datasets,
+                                suggested_questions: suggested_questions
                             })
                         }
                         : msg
@@ -273,7 +394,14 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
             sendFreeFlowMessage,
             resetChat,
             updateChatMessage,
-            startStreaming
+            startStreaming,
+            historyData,
+            loadMoreHistory,
+            isLoadingMore,
+            handleHistoryItemClick,
+            activeTabId,
+            setActiveTabId,
+            loadInitialHistory
         }}>
             {children}
         </WingmanContext.Provider>

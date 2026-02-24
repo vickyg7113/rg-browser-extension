@@ -33,6 +33,8 @@ import {
 } from "@/components/ui/table";
 import { useToast } from '@/lib/use-toast';
 import { Header } from './Header';
+import History from './History';
+import { useWingman, ChatMessage } from '../hooks/WingmanContext';
 
 interface AuthTokens {
   RGAuth?: {
@@ -83,29 +85,25 @@ export const ChatInterface: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [userName, setUserName] = useState<string>('');
   const [loading, setLoading] = useState(true);
-  interface ChatMessage {
-    id: string;
-    role: 'user' | 'assistant';
-    content: string;
-    status?: 'thinking' | 'completed' | 'error';
-    attachments?: string[];
-    metrics?: any[];
-    execution_summary?: any;
-    datasets?: any;
-    result?: string; // JSON string for structured result
-  }
 
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const {
+    messages,
+    setMessages,
+    isProcessing,
+    setIsProcessing,
+    sessionId,
+    activeTabId,
+    setActiveTabId
+  } = useWingman();
+
   const [downloadingFiles, setDownloadingFiles] = useState<Set<string>>(new Set());
   const [input, setInput] = useState('');
   const [showProfileSidebar, setShowProfileSidebar] = useState(false);
+  const [showHistorySidebar, setShowHistorySidebar] = useState(false);
   const [formattedUserRole, setFormattedUserRole] = useState<string>('');
   const [alternativeRoles, setAlternativeRoles] = useState<string[]>([]);
   const [rawRoles, setRawRoles] = useState<string[]>([]);
-  // Customer account ID – removed; input is text-only via handleSendMessage
-  // const [customerAccountId, setCustomerAccountId] = useState<string>('');
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
   const [currentQuery, setCurrentQuery] = useState<{
     id: string;
     title: string;
@@ -126,7 +124,9 @@ export const ChatInterface: React.FC = () => {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
   // Session ID for account summary
-  const [sessionId] = useState<string>(() => uuidv4());
+  // Removed local sessionId state, using context sessionId instead
+
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Toast hook
   const { toast } = useToast();
@@ -300,8 +300,25 @@ export const ChatInterface: React.FC = () => {
           queryClient.invalidateQueries({ queryKey: ['tab-info'] });
         }, 500);
       } else if (message.type === 'TAB_CHANGED' || message.type === 'TAB_UPDATED') {
-        // Invalidate tab info when the active tab changes
-        queryClient.invalidateQueries({ queryKey: ['tab-info'] });
+        // If background pushed tabInfo, update the cache immediately
+        if (message.tabInfo) {
+          const tabData = message.tabInfo;
+          const appName = tabData.title || tabData.hostname || 'Unknown';
+
+          queryClient.setQueryData(['tab-info'], {
+            title: appName,
+            favIconUrl: tabData.favIconUrl,
+            hostname: tabData.hostname,
+            url: tabData.url,
+            pathname: tabData.pathname,
+            localStorage: tabData.localStorage,
+            html: tabData.html,
+            isSupported: tabData.isSupported
+          });
+        } else {
+          // Fallback: Invalidate tab info if no data pushed
+          queryClient.invalidateQueries({ queryKey: ['tab-info'] });
+        }
       }
     };
 
@@ -588,6 +605,11 @@ export const ChatInterface: React.FC = () => {
     }
   }, []);
 
+  const handleSuggestionClick = useCallback((suggestion: string) => {
+    setInput(suggestion);
+    inputRef.current?.focus();
+  }, [setInput]);
+
   /**
    * Render assistant message content
    */
@@ -598,6 +620,7 @@ export const ChatInterface: React.FC = () => {
       message: message.content,
       attachments: message.attachments || [],
       metrics: message.metrics || [],
+      suggested_questions: message.suggested_questions || [],
       execution_summary: message.execution_summary || null,
       datasets: message.datasets || null
     });
@@ -614,10 +637,11 @@ export const ChatInterface: React.FC = () => {
           handleTalkToFile={() => { }}
           sessionId={sessionId}
           enableTalkToFile={false}
+          onSuggestionClick={handleSuggestionClick}
         />
       </React.Suspense>
     );
-  }, [isMarkdown, downloadingFiles, handleFileDownload, renderMetric, sessionId]);
+  }, [isMarkdown, downloadingFiles, handleFileDownload, renderMetric, sessionId, handleSuggestionClick]);
 
   // Initialize streaming service
   useEffect(() => {
@@ -1121,9 +1145,10 @@ export const ChatInterface: React.FC = () => {
     <div className="flex flex-col h-screen bg-white">
       {/* Common Header */}
       <Header
-        showTabInfo={false}
+        showTabInfo={true}
         tabInfo={tabInfo}
         onMenuClick={() => setShowProfileSidebar(true)}
+        onHistoryClick={() => setShowHistorySidebar(true)}
       />
 
       {/* Main Content – chat shown directly (app integration check disabled) */}
@@ -1136,7 +1161,7 @@ export const ChatInterface: React.FC = () => {
           <div className="space-y-2">
             <h2 className="text-xl font-semibold text-gray-900">Unsupported Site</h2>
             <p className="text-sm text-gray-600 leading-relaxed">
-              Wingman is currently optimized for HubSpot, Salesforce, and Revgain to provide the best revenue insights experience.
+              Wingman is currently optimized for HubSpot, Salesforce, Jira, and Revgain to provide the best revenue insights experience.
             </p>
           </div>
 
@@ -1150,6 +1175,10 @@ export const ChatInterface: React.FC = () => {
               <div className="flex items-center gap-3 text-sm text-gray-700">
                 <Icon icon="simple-icons:salesforce" className="w-4 h-4 text-[#00a1e0]" />
                 <span>Salesforce</span>
+              </div>
+              <div className="flex items-center gap-3 text-sm text-gray-700">
+                <Icon icon="simple-icons:jira" className="w-4 h-4 text-[#0052cc]" />
+                <span>Jira</span>
               </div>
               <div className="flex items-center gap-3 text-sm text-gray-700">
                 <img src={logoIcon} alt="Revgain" className="w-4 h-4" />
@@ -1195,6 +1224,7 @@ export const ChatInterface: React.FC = () => {
           <div className="border-t border-gray-200 bg-white p-4">
             <form onSubmit={handleSendMessage} className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 py-2">
               <input
+                ref={inputRef}
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -1312,6 +1342,21 @@ export const ChatInterface: React.FC = () => {
                 </div>
               </div>
             </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* History Sidebar Sheet */}
+      <Sheet open={showHistorySidebar} onOpenChange={setShowHistorySidebar}>
+        <SheetContent side="left" className="w-[320px] sm:w-[380px] p-0">
+          <SheetHeader className="px-4 pt-6 pb-4 border-b">
+            <SheetTitle className="text-lg font-semibold">History</SheetTitle>
+            <SheetDescription className="sr-only">
+              Chat history and past conversations
+            </SheetDescription>
+          </SheetHeader>
+          <div className="p-4 overflow-y-auto max-h-[calc(100vh-100px)]">
+            <History />
           </div>
         </SheetContent>
       </Sheet>

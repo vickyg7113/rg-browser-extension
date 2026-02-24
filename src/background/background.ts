@@ -364,23 +364,38 @@ chrome.action.onClicked.addListener((tab) => {
 
 // Listen for tab updates to notify sidepanel
 chrome.tabs.onActivated.addListener((activeInfo) => {
-  // Notify sidepanel that active tab changed
-  chrome.runtime.sendMessage({
-    type: 'TAB_CHANGED',
-    tabId: activeInfo.tabId
+  // Fetch full tab info and push to sidepanel
+  chrome.tabs.get(activeInfo.tabId).then(async (tab) => {
+    try {
+      const info = await fetchTabInfo(tab);
+      chrome.runtime.sendMessage({
+        type: 'TAB_CHANGED',
+        tabId: activeInfo.tabId,
+        tabInfo: info
+      }).catch(() => {
+        // Sidepanel might not be open, ignore error
+      });
+    } catch (error) {
+      console.error('[Background] Error pushing tab info on activated:', error);
+    }
   }).catch(() => {
-    // Sidepanel might not be open, ignore error
+    // Tab might have been closed quickly
   });
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.active) {
-    // Notify sidepanel that tab was updated
-    chrome.runtime.sendMessage({
-      type: 'TAB_UPDATED',
-      tabId: tabId
-    }).catch(() => {
-      // Sidepanel might not be open, ignore error
+    // Fetch full tab info and push to sidepanel
+    fetchTabInfo(tab).then((info) => {
+      chrome.runtime.sendMessage({
+        type: 'TAB_UPDATED',
+        tabId: tabId,
+        tabInfo: info
+      }).catch(() => {
+        // Sidepanel might not be open, ignore error
+      });
+    }).catch((error) => {
+      console.error('[Background] Error pushing tab info on updated:', error);
     });
   }
 });

@@ -6,6 +6,7 @@ export const MC_ADMIN_URL = '/mc-admin-api';
 export const PREFIX_WINGMAN = '/wingman';
 export const AUTO_API = '/autoapi';
 export const PREFIX_DB_INSTANCE = '/mc-admin-api';
+export const PREFIX_DELTA_ACCESS = '/delta-access';
 export const PREFIX_DATA_INGESTION_INSTANCE = '/autoapi';
 
 /**

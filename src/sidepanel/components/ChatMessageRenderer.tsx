@@ -18,6 +18,7 @@ interface ChatMessageRendererProps {
     handleTalkToFile: (path: string, name: string) => void;
     sessionId?: string | null;
     enableTalkToFile?: boolean;
+    onSuggestionClick?: (suggestion: string) => void;
 }
 
 const ThinkingDots = () => (
@@ -68,6 +69,7 @@ export const ChatMessageRenderer: React.FC<ChatMessageRendererProps> = ({
     handleTalkToFile,
     sessionId,
     enableTalkToFile = true,
+    onSuggestionClick,
 }) => {
     const parsedResult = useMemo(() => {
         try {
@@ -278,6 +280,25 @@ export const ChatMessageRenderer: React.FC<ChatMessageRendererProps> = ({
                         <div key={index} className="bg-white rounded-lg p-2 border border-gray-100 shadow-sm">
                             {renderMetric(metric)}
                         </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Suggested Questions */}
+            {parsedResult.suggested_questions && Array.isArray(parsedResult.suggested_questions) && parsedResult.suggested_questions.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-gray-100">
+                    <p className="w-full text-[11px] font-medium text-gray-400 uppercase tracking-wider mb-1">
+                        Suggestions
+                    </p>
+                    {parsedResult.suggested_questions.map((suggestion: string, index: number) => (
+                        <button
+                            key={index}
+                            onClick={() => onSuggestionClick?.(suggestion)}
+                            className="text-xs px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-100 rounded-full transition-all duration-200 text-left animate-in fade-in slide-in-from-bottom-2"
+                            style={{ animationDelay: `${index * 50}ms` }}
+                        >
+                            {suggestion}
+                        </button>
                     ))}
                 </div>
             )}

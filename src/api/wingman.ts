@@ -1,5 +1,5 @@
 import apiClient from '../services/apiClient';
-import { PREFIX_WINGMAN, PREFIX_DB_INSTANCE, PREFIX_DATA_INGESTION_INSTANCE } from './constants';
+import { PREFIX_WINGMAN, PREFIX_DB_INSTANCE, PREFIX_DATA_INGESTION_INSTANCE, PREFIX_DELTA_ACCESS } from './constants';
 
 /**
  * Create or update a view from a user query
@@ -114,9 +114,18 @@ export const fetchChatHistory = async (
   createdBy?: string
 ) => {
   try {
+    const customerDetails = localStorage.getItem("customerDetails");
+    let customerSchema = "customer_1001";
+    if (customerDetails) {
+      const parsed = JSON.parse(customerDetails);
+      const schema = parsed.CUSTOMER_SCHEMA || "1001";
+      customerSchema = schema.startsWith("customer_") ? schema : `customer_${schema}`;
+    }
+
     const payload: any = {
       db_name: 'model_company',
       table: 'wingman_chat_sessions',
+      schema: customerSchema,
       include_fields: ['id', 'title', 'updated_on', 'category'],
       limit,
       offset,
@@ -129,7 +138,7 @@ export const fetchChatHistory = async (
       ];
     }
 
-    const response = await apiClient.post(`${PREFIX_DB_INSTANCE}/data/fetch`, payload);
+    const response = await apiClient.post(`${PREFIX_DELTA_ACCESS}/data/fetch`, payload);
 
     if (response.data.success) {
       return {
@@ -159,13 +168,25 @@ export const fetchChatMessages = async (
   limit: number = 10
 ) => {
   try {
-    const response = await apiClient.post(`${PREFIX_DB_INSTANCE}/data/fetch`, {
+    const customerDetails = localStorage.getItem("customerDetails");
+    let customerSchema = "customer_1001";
+    if (customerDetails) {
+      const parsed = JSON.parse(customerDetails);
+      const schema = parsed.CUSTOMER_SCHEMA || "1001";
+      customerSchema = schema.startsWith("customer_") ? schema : `customer_${schema}`;
+    }
+
+    const response = await apiClient.post(`${PREFIX_DELTA_ACCESS}/data/fetch`, {
       db_name: 'model_company',
       table: 'wingman_chat_history',
+      schema: customerSchema,
       include_fields: ['id', 'created_on', 'query_id', 'custom_query', 'result', 'req_params'],
       limit,
       offset,
       order_by: [{ column: 'created_on', direction: 'DESC' }],
+      additional_fields: {
+        query_title: 'query_id.wingman_queries.title',
+      },
       filters: [{ column: 'session_id', operator: '=', value: sessionId }],
     });
 

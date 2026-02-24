@@ -14,7 +14,8 @@
     "*://*.hubspot.com/*",
     "*://*.revgain.ai/*",
     "*://*.salesforce.com/*",
-    "*://*.force.com/*"
+    "*://*.force.com/*",
+    "*://*.atlassian.net/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -25,7 +26,8 @@
         "*://*.hubspot.com/*",
         "*://*.revgain.ai/*",
         "*://*.salesforce.com/*",
-        "*://*.force.com/*"
+        "*://*.force.com/*",
+        "*://*.atlassian.net/*"
       ],
       "js": [
         "loginMonitor.js"
@@ -53,7 +55,8 @@
         "*://*.hubspot.com/*",
         "*://*.revgain.ai/*",
         "*://*.salesforce.com/*",
-        "*://*.force.com/*"
+        "*://*.force.com/*",
+        "*://*.atlassian.net/*"
       ]
     }
   ]
