@@ -127,6 +127,25 @@ export const ChatInterface: React.FC = () => {
   // Removed local sessionId state, using context sessionId instead
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll logic when new messages arrive or update
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      const container = chatContainerRef.current;
+      const threshold = 100; // px from bottom to trigger auto-scroll
+      const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
+
+      // If we're near bottom or the last message is from user, scroll to bottom
+      const lastMessage = messages[messages.length - 1];
+      if (isNearBottom || lastMessage?.role === 'user') {
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior: 'smooth'
+        });
+      }
+    }
+  }, [messages]);
 
   // Toast hook
   const { toast } = useToast();
@@ -1190,7 +1209,10 @@ export const ChatInterface: React.FC = () => {
       ) : (
         <>
           {/* Messages Area */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div
+            ref={chatContainerRef}
+            className="flex-1 overflow-y-auto p-4 space-y-4"
+          >
             {messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-gray-500">
                 <Icon icon="material-symbols:chat-bubble-outline" className="w-12 h-12 mb-4" />

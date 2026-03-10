@@ -7,6 +7,7 @@ import {
     TooltipProvider,
     TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { RGDEV_URL } from '@/constants/env';
 
 interface ChatMessageRendererProps {
     result: string;
@@ -235,7 +236,7 @@ export const ChatMessageRenderer: React.FC<ChatMessageRendererProps> = ({
                                                                 const session = (enableTalkToFile === false && sessionId) ? `&sessionId=${sessionId}` : '';
                                                                 // Note: window.open might be tricky in a chrome extension side panel depending on settings, 
                                                                 // but usually it opens a new tab.
-                                                                window.open(`/DataView?path=${path}&name=${name}${session}`, '_blank');
+                                                                window.open(`${RGDEV_URL}/DataView?path=${path}&name=${name}${session}`, '_blank');
                                                             }}
                                                             className="p-1 hover:bg-gray-200 rounded transition-colors"
                                                         >

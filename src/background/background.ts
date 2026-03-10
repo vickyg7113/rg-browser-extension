@@ -48,55 +48,25 @@ chrome.runtime.onMessage.addListener((
         sendResponse({ success: false, error: error.message });
       });
     } else {
-      // Get active tab in the CURRENT window (where sidepanel is open), excluding login domain and extension pages
-      // This ensures we get the tab from the window where the extension was opened, not other windows
-      chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
-        if (!tabs[0]?.id || !tabs[0]?.url) {
-          sendResponse({ success: false, error: 'Could not access current tab' });
-          return;
-        }
-
-        const activeTab = tabs[0];
-        const rgdevHostname = new URL(RGDEV_URL).hostname;
-
-        // If the active tab is the login domain or extension page, try to find another tab in the same window
-        if (activeTab.url && (
-          activeTab.url.startsWith('chrome-extension://') ||
-          activeTab.url.startsWith('chrome://') ||
-          activeTab.url.includes(rgdevHostname)
-        )) {
-          // Get all tabs in the current window and find a non-login, non-extension tab
-          chrome.tabs.query({ currentWindow: true }).then((allTabs) => {
-            const mainTab = allTabs.find(tab =>
-              tab.url &&
-              !tab.url.startsWith('chrome-extension://') &&
-              !tab.url.startsWith('chrome://') &&
-              !tab.url.includes(rgdevHostname) &&
-              (tab.url.startsWith('http://') || tab.url.startsWith('https://'))
-            );
-
-            const targetTab = mainTab || activeTab;
-
-            if (!targetTab?.id || !targetTab?.url) {
-              sendResponse({ success: false, error: 'Could not access main tab' });
-              return;
+      // First try the stored sidepanelTabId (set when the extension icon was clicked).
+      // This is the most reliable way to identify which tab opened the sidepanel,
+      // because service workers don't have a reliable "current window" context.
+      chrome.storage.session.get('sidepanelTabId').then(({ sidepanelTabId }) => {
+        if (sidepanelTabId) {
+          return chrome.tabs.get(sidepanelTabId).then((tab) => {
+            if (!tab.url) {
+              throw new Error('Tab URL not available');
             }
-            fetchTabInfo(targetTab).then((info) => {
+            return fetchTabInfo(tab).then((info) => {
               sendResponse({ success: true, data: info });
-            }).catch((error) => {
-              sendResponse({ success: false, error: error.message });
             });
-          }).catch((error) => {
-            sendResponse({ success: false, error: error.message });
-          });
-        } else {
-          // Active tab is valid, use it
-          fetchTabInfo(activeTab).then((info) => {
-            sendResponse({ success: true, data: info });
-          }).catch((error) => {
-            sendResponse({ success: false, error: error.message });
+          }).catch(() => {
+            // Stored tab no longer exists; fall back to querying the active tab
+            return queryActiveTab(sendResponse);
           });
         }
+        // No stored tabId; fall back to querying the active tab
+        return queryActiveTab(sendResponse);
       }).catch((error) => {
         sendResponse({ success: false, error: error.message });
       });
@@ -262,12 +232,76 @@ chrome.runtime.onMessage.addListener((
 });
 
 /**
+ * Fallback: query the active tab in the current window for GET_TAB_INFO
+ */
+function queryActiveTab(sendResponse: (response: MessageResponse) => void): void {
+  const rgdevHostname = new URL(RGDEV_URL).hostname;
+
+  chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
+    if (!tabs[0]?.id || !tabs[0]?.url) {
+      sendResponse({ success: false, error: 'Could not access current tab' });
+      return;
+    }
+
+    const activeTab = tabs[0];
+
+    if (
+      activeTab.url?.startsWith('chrome-extension://') ||
+      activeTab.url?.startsWith('chrome://') ||
+      activeTab.url?.includes(rgdevHostname)
+    ) {
+      // Active tab is an extension/system page — find the first real tab in the window
+      chrome.tabs.query({ currentWindow: true }).then((allTabs) => {
+        const mainTab = allTabs.find(tab =>
+          tab.url &&
+          !tab.url.startsWith('chrome-extension://') &&
+          !tab.url.startsWith('chrome://') &&
+          !tab.url.includes(rgdevHostname) &&
+          (tab.url.startsWith('http://') || tab.url.startsWith('https://'))
+        );
+
+        const targetTab = mainTab || activeTab;
+        if (!targetTab?.id || !targetTab?.url) {
+          sendResponse({ success: false, error: 'Could not access main tab' });
+          return;
+        }
+        fetchTabInfo(targetTab)
+          .then((info) => sendResponse({ success: true, data: info }))
+          .catch((error) => sendResponse({ success: false, error: error.message }));
+      }).catch((error) => sendResponse({ success: false, error: error.message }));
+    } else {
+      fetchTabInfo(activeTab)
+        .then((info) => sendResponse({ success: true, data: info }))
+        .catch((error) => sendResponse({ success: false, error: error.message }));
+    }
+  }).catch((error) => sendResponse({ success: false, error: error.message }));
+}
+
+/**
  * Check if a URL is supported by the extension based on manifest permissions
  */
 async function isUrlSupported(url: string): Promise<boolean> {
   try {
-    // Check if the manifest has permissions for this origin
-    const origin = new URL(url).origin + '/*';
+    const parsedUrl = new URL(url);
+    const domain = parsedUrl.hostname.toLowerCase();
+
+    // Manual check for supported domains as a robust fallback
+    const supportedDomains = [
+      'revgain.ai',
+      'hubspot.com',
+      'salesforce.com',
+      'force.com',
+      'atlassian.net'
+    ];
+
+    const isManuallySupported = supportedDomains.some(d =>
+      domain === d || domain.endsWith('.' + d)
+    );
+
+    if (isManuallySupported) return true;
+
+    // Check if the manifest has permissions for this origin as a secondary check
+    const origin = parsedUrl.origin + '/*';
     return await chrome.permissions.contains({ origins: [origin] });
   } catch (error) {
     return false;
@@ -358,6 +392,8 @@ async function fetchTabInfo(tab: chrome.tabs.Tab): Promise<any> {
 // Open sidepanel when extension icon is clicked
 chrome.action.onClicked.addListener((tab) => {
   if (tab.id) {
+    // Store the tab that triggered the sidepanel open so GET_TAB_INFO uses it on initial load
+    chrome.storage.session.set({ sidepanelTabId: tab.id });
     chrome.sidePanel.open({ tabId: tab.id });
   }
 });
