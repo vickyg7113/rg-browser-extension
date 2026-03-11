@@ -8,7 +8,8 @@ import { AQE_EXECUTE_ENDPOINT } from './constants';
  */
 export const executeAgenticQuery = async (
     params: { query: string; sessionId: string },
-    context: Record<string, any> = {}
+    context: Record<string, any> = {},
+    signal?: AbortSignal
 ) => {
     try {
         const payload = {
@@ -17,7 +18,7 @@ export const executeAgenticQuery = async (
             context
         };
 
-        const response = await apiClient.post(AQE_EXECUTE_ENDPOINT, payload);
+        const response = await apiClient.post(AQE_EXECUTE_ENDPOINT, payload, { signal });
         return response.data;
     } catch (error) {
         console.error('Error executing agentic query:', error);

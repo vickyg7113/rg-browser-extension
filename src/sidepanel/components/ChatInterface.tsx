@@ -128,24 +128,29 @@ export const ChatInterface: React.FC = () => {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [showScrollButton, setShowScrollButton] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Auto-scroll logic when new messages arrive or update
+  // Auto-scroll to bottom whenever messages change
   useEffect(() => {
-    if (chatContainerRef.current) {
-      const container = chatContainerRef.current;
-      const threshold = 100; // px from bottom to trigger auto-scroll
-      const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
-
-      // If we're near bottom or the last message is from user, scroll to bottom
-      const lastMessage = messages[messages.length - 1];
-      if (isNearBottom || lastMessage?.role === 'user') {
-        container.scrollTo({
-          top: container.scrollHeight,
-          behavior: 'smooth'
-        });
-      }
-    }
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Show/hide scroll-to-bottom button based on scroll position
+  useEffect(() => {
+    const container = chatContainerRef.current;
+    if (!container) return;
+    const handleScroll = () => {
+      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      // Use a smaller threshold (50px) for better responsiveness in sidebar
+      setShowScrollButton(distanceFromBottom > 50);
+    };
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    // Initial check in case content is already scrolled
+    handleScroll();
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [messages]); // Re-bind if messages change to ensure height updates are captured
 
   // Toast hook
   const { toast } = useToast();
@@ -427,6 +432,35 @@ export const ChatInterface: React.FC = () => {
     }
   };
 
+  const handleStopRequest = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
+    if (streamingServiceRef.current) {
+      streamingServiceRef.current.disconnect();
+    }
+
+    if (activeMessageIdRef.current) {
+      const messageId = activeMessageIdRef.current;
+      setMessages(prev => prev.map(msg =>
+        msg.id === messageId
+          ? {
+            ...msg,
+            status: 'error',
+            content: 'Request stopped.',
+            result: JSON.stringify({ status: 'error', message: 'Request stopped.' })
+          }
+          : msg
+      ));
+    }
+
+    setIsProcessing(false);
+    activeStreamingTaskRef.current = null;
+    activeMessageIdRef.current = null;
+  }, [setMessages, setIsProcessing]);
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     const message = input.trim();
@@ -457,6 +491,10 @@ export const ChatInterface: React.FC = () => {
     activeMessageIdRef.current = processingMessageId;
 
     try {
+      // Create new AbortController for this request
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
       // Construct web content context
       const webContent = tabInfo ? {
         title: tabInfo.title || '',
@@ -466,7 +504,8 @@ export const ChatInterface: React.FC = () => {
 
       const result = await executeAgenticQuery(
         { query: message, sessionId },
-        webContent || {}
+        webContent || {},
+        controller.signal
       );
 
       let resultData = result?.success && result?.data ? result.data : result;
@@ -493,6 +532,10 @@ export const ChatInterface: React.FC = () => {
         startTaskPolling(taskId, processingMessageId, sessionId);
       }
     } catch (error) {
+      if (error instanceof Error && error.name === 'CanceledError') {
+        console.log('[ChatInterface] Request explicitly canceled');
+        return; // handleStopRequest already updated the UI
+      }
       console.error('[ChatInterface] Error sending message:', error);
       const errorMessage = error instanceof Error ? error.message : 'An error occurred';
       setMessages(prev => prev.map(msg =>
@@ -1209,36 +1252,50 @@ export const ChatInterface: React.FC = () => {
       ) : (
         <>
           {/* Messages Area */}
-          <div
-            ref={chatContainerRef}
-            className="flex-1 overflow-y-auto p-4 space-y-4"
-          >
-            {messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-gray-500">
-                <Icon icon="material-symbols:chat-bubble-outline" className="w-12 h-12 mb-4" />
-                <p className="text-lg font-medium">Start a conversation</p>
-                <p className="text-sm">Ask me anything about your revenue insights</p>
-              </div>
-            ) : (
-              messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`${message.role === 'user' ? 'max-w-[80%]' : 'w-full'} rounded-lg px-4 py-2 ${message.role === 'user'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-transparent text-gray-900'
-                      }`}
-                  >
-                    {message.role === 'user' ? (
-                      <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                    ) : (
-                      renderAssistantMessage(message)
-                    )}
-                  </div>
+          <div className="flex-1 relative overflow-hidden">
+            <div
+              ref={chatContainerRef}
+              className="h-full overflow-y-auto p-4 space-y-4"
+            >
+              {messages.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                  <Icon icon="material-symbols:chat-bubble-outline" className="w-12 h-12 mb-4" />
+                  <p className="text-lg font-medium">Start a conversation</p>
+                  <p className="text-sm">Ask me anything about your revenue insights</p>
                 </div>
-              ))
+              ) : (
+                messages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div
+                      className={`${message.role === 'user' ? 'max-w-[80%]' : 'w-full'} rounded-lg px-4 py-2 ${message.role === 'user'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-transparent text-gray-900'
+                        }`}
+                    >
+                      {message.role === 'user' ? (
+                        <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                      ) : (
+                        renderAssistantMessage(message)
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Scroll to bottom button */}
+            {showScrollButton && (
+              <button
+                onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
+                className="absolute bottom-3 right-3 w-8 h-8 bg-white border border-gray-200 rounded-full shadow-md flex items-center justify-center hover:bg-gray-50 transition-all z-20"
+                aria-label="Scroll to bottom"
+              >
+                <Icon icon="material-symbols:keyboard-arrow-down-rounded" className="w-5 h-5 text-gray-600" />
+              </button>
             )}
           </div>
 
@@ -1254,12 +1311,13 @@ export const ChatInterface: React.FC = () => {
                 className="flex-1 px-2 py-2 bg-transparent border-none outline-none text-sm text-gray-900 placeholder-gray-500"
               />
               <button
-                type="submit"
-                disabled={!input.trim() || isProcessing}
+                type={isProcessing ? "button" : "submit"}
+                onClick={isProcessing ? handleStopRequest : undefined}
+                disabled={!isProcessing && !input.trim()}
                 className="w-8 h-8 bg-gray-100 hover:bg-gray-200 rounded-full flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
               >
                 {isProcessing ? (
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
+                  <Icon icon="material-symbols:stop-circle-rounded" className="w-6 h-6 text-red-500" />
                 ) : (
                   <Icon icon="material-symbols:send-rounded" className="w-5 h-5 text-gray-600" />
                 )}
