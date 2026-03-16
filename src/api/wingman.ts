@@ -218,9 +218,18 @@ export const createChatSession = async (
     const { v4: uuidv4 } = await import('uuid');
     const sessionId = uuidv4();
 
-    const response = await apiClient.post(`${PREFIX_DB_INSTANCE}/data/insert`, {
+    const customerDetails = localStorage.getItem('customerDetails');
+    let customerSchema = 'customer_1001';
+    if (customerDetails) {
+      const parsed = JSON.parse(customerDetails);
+      const schema = parsed.CUSTOMER_SCHEMA || '1001';
+      customerSchema = schema.startsWith('customer_') ? schema : `customer_${schema}`;
+    }
+
+    const response = await apiClient.post(`${PREFIX_DELTA_ACCESS}/data/insert`, {
       db_name: 'model_company',
       table: 'wingman_chat_sessions',
+      schema: customerSchema,
       data: {
         id: sessionId,
         title,
@@ -245,13 +254,23 @@ export const createChatSession = async (
 export const insertChatMessage = async (sessionId: string, result: any) => {
   try {
     const { v4: uuidv4 } = await import('uuid');
+
+    const customerDetails = localStorage.getItem('customerDetails');
+    let customerSchema = 'customer_1001';
+    if (customerDetails) {
+      const parsed = JSON.parse(customerDetails);
+      const schema = parsed.CUSTOMER_SCHEMA || '1001';
+      customerSchema = schema.startsWith('customer_') ? schema : `customer_${schema}`;
+    }
+
     const response = await apiClient.post(`${PREFIX_DB_INSTANCE}/data/insert`, {
       db_name: 'model_company',
       table: 'wingman_chat_history',
+      schema: customerSchema,
       data: {
         id: uuidv4(),
         session_id: sessionId,
-        result: JSON.stringify(result),
+        result: typeof result === 'string' ? result : JSON.stringify(result),
       },
     });
 

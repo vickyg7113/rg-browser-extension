@@ -34,7 +34,7 @@ import {
 import { useToast } from '@/lib/use-toast';
 import { Header } from './Header';
 import History from './History';
-import { useWingman, ChatMessage } from '../hooks/WingmanContext';
+import { useWingman, ChatMessage, NEW_CHAT_ID } from '../hooks/WingmanContext';
 
 interface AuthTokens {
   RGAuth?: {
@@ -93,7 +93,8 @@ export const ChatInterface: React.FC = () => {
     setIsProcessing,
     sessionId,
     activeTabId,
-    setActiveTabId
+    setActiveTabId,
+    createNewChatSession
   } = useWingman();
 
   const [downloadingFiles, setDownloadingFiles] = useState<Set<string>>(new Set());
@@ -502,8 +503,16 @@ export const ChatInterface: React.FC = () => {
         html: tabInfo.html || ''
       } : null;
 
+      // Create session if this is a new chat
+      let currentSessionId = sessionId;
+      if (activeTabId === NEW_CHAT_ID) {
+        const title = message.substring(0, 50) + (message.length > 50 ? '...' : '');
+        const { sessionId: newSessionId } = await createNewChatSession(title);
+        currentSessionId = newSessionId;
+      }
+
       const result = await executeAgenticQuery(
-        { query: message, sessionId },
+        { query: message, sessionId: currentSessionId },
         webContent || {},
         controller.signal
       );
@@ -513,7 +522,7 @@ export const ChatInterface: React.FC = () => {
       const isStreaming = handleQueryResultWithStreaming(
         resultData,
         processingMessageId,
-        sessionId,
+        currentSessionId,
         {}
       );
 
@@ -529,7 +538,7 @@ export const ChatInterface: React.FC = () => {
         } catch (_) { }
       }
       if (taskId && !isStreaming) {
-        startTaskPolling(taskId, processingMessageId, sessionId);
+        startTaskPolling(taskId, processingMessageId, currentSessionId);
       }
     } catch (error) {
       if (error instanceof Error && error.name === 'CanceledError') {

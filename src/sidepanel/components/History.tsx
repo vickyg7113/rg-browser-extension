@@ -23,6 +23,7 @@ export default function History() {
         activeTabId,
         loadMoreHistory,
         isLoadingMore,
+        isLoadingInitial,
         handleHistoryItemClick,
         isProcessing,
         loadInitialHistory
@@ -95,6 +96,14 @@ export default function History() {
     const handleDropdownClose = () => {
         setClickedItemId(null);
     };
+
+    if (isLoadingInitial) {
+        return (
+            <div className="flex items-center justify-center py-8 text-gray-500 text-sm">
+                Loading history...
+            </div>
+        );
+    }
 
     return (
         <div className="space-y-4">
