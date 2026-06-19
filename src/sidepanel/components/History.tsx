@@ -16,7 +16,11 @@ import { useWingman, NEW_CHAT_ID } from "../hooks/WingmanContext";
 import type { HistoryItem } from "../hooks/WingmanContext";
 import { useState, useRef, useCallback, useEffect } from "react";
 
-export default function History() {
+interface HistoryProps {
+    category?: 'CHAT' | 'TTF';
+}
+
+export default function History({ category = 'CHAT' }: HistoryProps) {
     const {
         historyData,
         setActiveTabId,
@@ -77,10 +81,14 @@ export default function History() {
         }, {} as Record<string, HistoryItem[]>);
     };
 
-    // Deduplicate history items by id to prevent duplicate rendering
-    const uniqueHistoryData = historyData.filter((item, index, self) =>
-        index === self.findIndex((t) => t.id === item.id)
-    );
+    // Deduplicate then filter by category — matches frontend WingmanMain logic exactly
+    const uniqueHistoryData = historyData
+        .filter((item, index, self) => index === self.findIndex((t) => t.id === item.id))
+        .filter(item => {
+            if (item.id === NEW_CHAT_ID) return true;
+            if (category === 'TTF') return item.category === 'TTF';
+            return item.category !== 'TTF' || !item.category;
+        });
 
     const groupedHistory = groupHistoryByDate(uniqueHistoryData);
 
