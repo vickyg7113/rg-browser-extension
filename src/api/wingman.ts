@@ -1,6 +1,30 @@
 import apiClient from '../services/apiClient';
 import { PREFIX_WINGMAN, PREFIX_DB_INSTANCE, PREFIX_DATA_INGESTION_INSTANCE, PREFIX_DELTA_ACCESS } from './constants';
 
+const getCustomerSchema = (): string => {
+  try {
+    const raw = localStorage.getItem('customerDetails');
+    return raw ? JSON.parse(raw).CUSTOMER_SCHEMA || '' : '';
+  } catch {
+    return '';
+  }
+};
+
+/**
+ * Upload files to the lakehouse for Talk to File sessions
+ */
+export const uploadFileToLakehouse = async (files: File[], sessionId: string) => {
+  const formData = new FormData();
+  files.forEach(file => formData.append('files', file));
+
+  const response = await apiClient.post(
+    `${PREFIX_DATA_INGESTION_INSTANCE}/upload-to-lakehouse?wingman_session_id=${sessionId}&wingman_mode=ttp`,
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' } }
+  );
+  return response.data;
+};
+
 /**
  * Create or update a view from a user query
  * @param userQuery - The natural language query from the user
@@ -111,16 +135,11 @@ export const checkTaskStatus = async (taskId: string) => {
 export const fetchChatHistory = async (
   offset: number = 0,
   limit: number = 10,
+  category?: 'CHAT' | 'TTF',
   createdBy?: string
 ) => {
   try {
-    const customerDetails = localStorage.getItem("customerDetails");
-    let customerSchema = "customer_1001";
-    if (customerDetails) {
-      const parsed = JSON.parse(customerDetails);
-      const schema = parsed.CUSTOMER_SCHEMA || "1001";
-      customerSchema = schema.startsWith("customer_") ? schema : `customer_${schema}`;
-    }
+    const customerSchema = getCustomerSchema();
 
     const payload: any = {
       db_name: 'model_company',
@@ -132,10 +151,19 @@ export const fetchChatHistory = async (
       order_by: [{ column: 'updated_on', direction: 'DESC' }],
     };
 
-    if (createdBy) {
+    // Match frontend filter logic exactly
+    if (category === 'TTF') {
       payload.filters = [
-        { column: 'created_by', operator: '=', value: createdBy }
+        { column: 'category', operator: '=', value: 'TTF' },
+        ...(createdBy ? [{ column: 'created_by', operator: '=', value: createdBy }] : []),
       ];
+    } else if (category === 'CHAT') {
+      payload.filters = [
+        { column: 'category', operator: '!=', value: 'TTF' },
+        ...(createdBy ? [{ column: 'created_by', operator: '=', value: createdBy }] : []),
+      ];
+    } else if (createdBy) {
+      payload.filters = [{ column: 'created_by', operator: '=', value: createdBy }];
     }
 
     const response = await apiClient.post(`${PREFIX_DELTA_ACCESS}/data/fetch`, payload);
@@ -168,13 +196,7 @@ export const fetchChatMessages = async (
   limit: number = 10
 ) => {
   try {
-    const customerDetails = localStorage.getItem("customerDetails");
-    let customerSchema = "customer_1001";
-    if (customerDetails) {
-      const parsed = JSON.parse(customerDetails);
-      const schema = parsed.CUSTOMER_SCHEMA || "1001";
-      customerSchema = schema.startsWith("customer_") ? schema : `customer_${schema}`;
-    }
+    const customerSchema = getCustomerSchema();
 
     const response = await apiClient.post(`${PREFIX_DELTA_ACCESS}/data/fetch`, {
       db_name: 'model_company',
@@ -218,13 +240,7 @@ export const createChatSession = async (
     const { v4: uuidv4 } = await import('uuid');
     const sessionId = uuidv4();
 
-    const customerDetails = localStorage.getItem('customerDetails');
-    let customerSchema = 'customer_1001';
-    if (customerDetails) {
-      const parsed = JSON.parse(customerDetails);
-      const schema = parsed.CUSTOMER_SCHEMA || '1001';
-      customerSchema = schema.startsWith('customer_') ? schema : `customer_${schema}`;
-    }
+    const customerSchema = getCustomerSchema();
 
     const response = await apiClient.post(`${PREFIX_DELTA_ACCESS}/data/insert`, {
       db_name: 'model_company',
@@ -255,13 +271,7 @@ export const insertChatMessage = async (sessionId: string, result: any) => {
   try {
     const { v4: uuidv4 } = await import('uuid');
 
-    const customerDetails = localStorage.getItem('customerDetails');
-    let customerSchema = 'customer_1001';
-    if (customerDetails) {
-      const parsed = JSON.parse(customerDetails);
-      const schema = parsed.CUSTOMER_SCHEMA || '1001';
-      customerSchema = schema.startsWith('customer_') ? schema : `customer_${schema}`;
-    }
+    const customerSchema = getCustomerSchema();
 
     const response = await apiClient.post(`${PREFIX_DB_INSTANCE}/data/insert`, {
       db_name: 'model_company',

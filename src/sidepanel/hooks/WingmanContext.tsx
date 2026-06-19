@@ -84,7 +84,9 @@ interface WingmanContextType {
     setIsCustomerContextEnabled: React.Dispatch<React.SetStateAction<boolean>>;
     startTaskPolling: (taskId: string, messageId: string, sessionId: string) => void;
     stopStreaming: () => void;
-    setActiveView: (view: string) => void;
+    activeView: 'chat' | 'ttf';
+    setActiveView: (view: 'chat' | 'ttf') => void;
+    createTTFSession: (title: string) => Promise<{ sessionId: string }>;
 }
 
 const WingmanContext = createContext<WingmanContextType | undefined>(undefined);
@@ -126,6 +128,11 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const [sessionChats, setSessionChats] = useState<Record<string, SessionChatData>>({});
     const [currentQuery, setCurrentQuery] = useState<CurrentQuery | null>(null);
     const [isCustomerContextEnabled, setIsCustomerContextEnabled] = useState(true);
+    const [activeView, setActiveView] = useState<'chat' | 'ttf'>('chat');
+
+    // TTF pagination state (separate from CHAT pagination — matches frontend)
+    const [ttfHistoryOffset, setTtfHistoryOffset] = useState(0);
+    const [hasTtfNextPage, setHasTtfNextPage] = useState(true);
 
     // ── Refs ───────────────────────────────────────────────
     const streamingServiceRef = useRef<any>(null);
@@ -133,8 +140,13 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const activeSessionIdRef = useRef<string | null>(null);
 
     // ── Helpers ────────────────────────────────────────────
-    const setActiveView = useCallback((_view: string) => {
-        // Placeholder — wire up to parent router/state as needed
+    const getUserEmail = useCallback(async (): Promise<string | undefined> => {
+        try {
+            const result = await chrome.storage.local.get(['authTokens']);
+            return result.authTokens?.RGAuth?.email;
+        } catch {
+            return undefined;
+        }
     }, []);
 
     // ── History ────────────────────────────────────────────
@@ -143,7 +155,16 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
         hasLoadedInitialRef.current = true;
         setIsLoadingInitial(true);
         try {
-            const result = await fetchChatHistory(0, 10);
+            const email = await getUserEmail();
+            // Load CHAT and TTF in parallel — matches frontend loadInitialHistory exactly
+            const [chatResult, ttfResult] = await Promise.all([
+                fetchChatHistory(0, 10, 'CHAT', email),
+                fetchChatHistory(0, 10, 'TTF', email),
+            ]);
+            // Combine and sort by updated_on desc — same as frontend
+            const combined = [...chatResult.data, ...ttfResult.data].sort(
+                (a, b) => new Date(b.updated_on).getTime() - new Date(a.updated_on).getTime()
+            );
             setHistoryData([
                 {
                     id: NEW_CHAT_ID,
@@ -153,26 +174,38 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
                     created_by: "System",
                     updated_by: "System",
                 },
-                ...result.data
+                ...combined,
             ]);
-            setHasNextPage(result.hasNextPage);
+            setHasNextPage(chatResult.hasNextPage);
             setHistoryOffset(10);
+            setHasTtfNextPage(ttfResult.hasNextPage);
+            setTtfHistoryOffset(10);
         } catch (error) {
             console.error("Error loading initial history:", error);
-            hasLoadedInitialRef.current = false; // allow retry on error
+            hasLoadedInitialRef.current = false;
         } finally {
             setIsLoadingInitial(false);
         }
-    }, []);
+    }, [getUserEmail]);
 
     const loadMoreHistory = useCallback(async () => {
-        if (!hasNextPage || isLoadingMore) return;
+        if (isLoadingMore) return;
         setIsLoadingMore(true);
         try {
-            const result = await fetchChatHistory(historyOffset, 10);
-            setHistoryData(prev => [...prev, ...result.data]);
-            setHasNextPage(result.hasNextPage);
-            setHistoryOffset(prev => prev + 10);
+            const email = await getUserEmail();
+            if (activeView === 'ttf') {
+                if (!hasTtfNextPage) return;
+                const result = await fetchChatHistory(ttfHistoryOffset, 10, 'TTF', email);
+                setHistoryData(prev => [...prev, ...result.data]);
+                setHasTtfNextPage(result.hasNextPage);
+                setTtfHistoryOffset(prev => prev + 10);
+            } else {
+                if (!hasNextPage) return;
+                const result = await fetchChatHistory(historyOffset, 10, 'CHAT', email);
+                setHistoryData(prev => [...prev, ...result.data]);
+                setHasNextPage(result.hasNextPage);
+                setHistoryOffset(prev => prev + 10);
+            }
         } finally {
             setIsLoadingMore(false);
         }
@@ -265,6 +298,35 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return { sessionId: newSessionId };
     }, []);
 
+    const createTTFSession = useCallback(async (title: string): Promise<{ sessionId: string }> => {
+        const authTokens = localStorage.getItem('authTokens');
+        const userName = authTokens
+            ? JSON.parse(authTokens)?.RGAuth?.email || 'user'
+            : 'user';
+
+        const { sessionId: newSessionId } = await createChatSession(title, userName, 'TTF');
+
+        setSessionChats(prev => ({
+            ...prev,
+            [newSessionId]: { data: [], hasNextPage: false, offset: 0 }
+        }));
+
+        const newHistoryItem: HistoryItem = {
+            id: newSessionId,
+            title,
+            created_on: new Date().toISOString(),
+            updated_on: new Date().toISOString(),
+            created_by: userName,
+            updated_by: userName,
+            category: 'TTF',
+        };
+        setHistoryData(prev => [prev[0], newHistoryItem, ...prev.slice(1)]);
+        setActiveTabId(newSessionId);
+        setSessionId(newSessionId);
+
+        return { sessionId: newSessionId };
+    }, []);
+
     const addChatMessage = useCallback((sid: string, message: Partial<ChatMessage>) => {
         const fullMessage: ChatMessage = {
             id: message.id || uuidv4(),
@@ -305,6 +367,17 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
             console.error("Error loading more chat messages:", error);
         }
     }, [sessionChats]);
+
+    // Reset activeTabId when switching views if current session belongs to the other category
+    // Matches frontend main.tsx useEffect on activeView
+    React.useEffect(() => {
+        if (!activeTabId || activeTabId === NEW_CHAT_ID) return;
+        const currentSession = historyData.find(item => item.id === activeTabId);
+        if (!currentSession) return;
+        const isCurrentTTF = currentSession.category === 'TTF';
+        if (activeView === 'ttf' && !isCurrentTTF) setActiveTabId(NEW_CHAT_ID);
+        if (activeView === 'chat' && isCurrentTTF) setActiveTabId(NEW_CHAT_ID);
+    }, [activeView]);
 
     // ── updateChatMessage: updates both stores ─────────────
     const updateChatMessage = useCallback((sid: string, messageId: string, updates: Partial<ChatMessage>) => {
@@ -616,7 +689,9 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
             setIsCustomerContextEnabled,
             startTaskPolling,
             stopStreaming,
+            activeView,
             setActiveView,
+            createTTFSession,
         }}>
             {children}
         </WingmanContext.Provider>

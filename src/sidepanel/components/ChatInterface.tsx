@@ -23,6 +23,7 @@ import { transformWidgetData } from '../../utils/chartDataTransformer';
 // Lazy load heavy components to improve initial load time
 const ChatMessageRenderer = React.lazy(() => import('./ChatMessageRenderer').then(module => ({ default: module.ChatMessageRenderer })));
 const WidgetRouter = React.lazy(() => import('./WidgetRouter').then(module => ({ default: module.WidgetRouter })));
+const TalkToFile = React.lazy(() => import('../talk-to-file/TalkToFile').then(module => ({ default: module.TalkToFile })));
 import {
   Table,
   TableBody,
@@ -94,7 +95,9 @@ export const ChatInterface: React.FC = () => {
     sessionId,
     activeTabId,
     setActiveTabId,
-    createNewChatSession
+    createNewChatSession,
+    activeView,
+    setActiveView,
   } = useWingman();
 
   const [downloadingFiles, setDownloadingFiles] = useState<Set<string>>(new Set());
@@ -1222,8 +1225,33 @@ export const ChatInterface: React.FC = () => {
         onHistoryClick={() => setShowHistorySidebar(true)}
       />
 
+      {/* View tab switcher */}
+      <div className="flex border-b border-gray-100 bg-white">
+        <button
+          onClick={() => setActiveView('chat')}
+          className={`flex-1 py-2 text-xs font-medium transition-colors ${activeView === 'chat' ? 'text-gray-900 border-b-2 border-gray-900' : 'text-gray-400 hover:text-gray-600'}`}
+        >
+          Chat
+        </button>
+        <button
+          onClick={() => setActiveView('ttf')}
+          className={`flex-1 py-2 text-xs font-medium transition-colors ${activeView === 'ttf' ? 'text-gray-900 border-b-2 border-gray-900' : 'text-gray-400 hover:text-gray-600'}`}
+        >
+          Talk to File
+        </button>
+      </div>
+
+      {/* Talk to File view */}
+      {activeView === 'ttf' && (
+        <div className="flex-1 overflow-hidden">
+          <React.Suspense fallback={<div className="flex items-center justify-center h-full"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-600" /></div>}>
+            <TalkToFile />
+          </React.Suspense>
+        </div>
+      )}
+
       {/* Main Content – chat shown directly (app integration check disabled) */}
-      {tabInfo && tabInfo.isSupported === false ? (
+      {activeView === 'chat' && (tabInfo && tabInfo.isSupported === false ? (
         <div className="flex-1 flex flex-col items-center justify-center px-8 text-center space-y-6">
           <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center">
             <Icon icon="lucide:globe" className="w-8 h-8 text-gray-400" />
@@ -1334,7 +1362,7 @@ export const ChatInterface: React.FC = () => {
             </form>
           </div>
         </>
-      )}
+      ))}
 
       {/* Profile Sidebar Sheet */}
       <Sheet open={showProfileSidebar} onOpenChange={setShowProfileSidebar}>
@@ -1445,7 +1473,7 @@ export const ChatInterface: React.FC = () => {
             </SheetDescription>
           </SheetHeader>
           <div className="p-4 overflow-y-auto max-h-[calc(100vh-100px)]">
-            <History />
+            <History category={activeView === 'ttf' ? 'TTF' : 'CHAT'} />
           </div>
         </SheetContent>
       </Sheet>
