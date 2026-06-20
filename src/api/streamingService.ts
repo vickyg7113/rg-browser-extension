@@ -88,29 +88,15 @@ export class StreamingService {
               });
             }
           } else if (data.event_type === 'completed') {
-            // Handle the updated response format: result is in data.data.result
-            const finalResultWrapper = data.data?.result;
-            const finalResultData = finalResultWrapper?.result || finalResultWrapper;
+            const finalResultObject = data.data?.result?.result || data.result?.result;
 
             let chatMessage = data.update_result?.data;
 
-            if (!chatMessage && finalResultWrapper) {
+            if (!chatMessage && finalResultObject) {
               chatMessage = {
-                result: JSON.stringify({
-                  status: 'completed',
-                  message: finalResultData?.message || data.message || 'Task completed successfully',
-                  attachments: finalResultData?.attachments || finalResultWrapper?.attachments || [],
-                  metrics: finalResultData?.metrics || finalResultWrapper?.metrics || [],
-                  suggested_questions: finalResultData?.suggested_questions || finalResultWrapper?.suggested_questions || [],
-                  execution_summary: finalResultData?.execution_summary || finalResultWrapper?.execution_summary || null,
-                  datasets: finalResultData?.datasets || finalResultWrapper?.datasets || null
-                }),
-                attachments: finalResultData?.attachments || finalResultWrapper?.attachments || [],
-                metrics: finalResultData?.metrics || finalResultWrapper?.metrics || [],
-                suggested_questions: finalResultData?.suggested_questions || finalResultWrapper?.suggested_questions || [],
-                execution_summary: finalResultData?.execution_summary || finalResultWrapper?.execution_summary || null,
-                datasets: finalResultData?.datasets || finalResultWrapper?.datasets || null,
-                req_params: finalResultData?.req_params || finalResultWrapper?.req_params || {}
+                result: JSON.stringify(finalResultObject),
+                attachments: finalResultObject.attachments || [],
+                req_params: data.data?.result?.req_params || data.result?.req_params || {}
               };
             } else if (chatMessage && typeof chatMessage.result !== 'string') {
               chatMessage.result = JSON.stringify(chatMessage.result);

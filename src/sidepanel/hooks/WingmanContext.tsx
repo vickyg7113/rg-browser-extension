@@ -138,6 +138,7 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const streamingServiceRef = useRef<any>(null);
     const activeMessageIdRef = useRef<string | null>(null);
     const activeSessionIdRef = useRef<string | null>(null);
+    const loadingMoreRef = useRef(false);
 
     // ── Helpers ────────────────────────────────────────────
     const getUserEmail = useCallback(async (): Promise<string | undefined> => {
@@ -189,27 +190,34 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }, [getUserEmail]);
 
     const loadMoreHistory = useCallback(async () => {
-        if (isLoadingMore) return;
+        // Use ref for guard — avoids isLoadingMore in dep array which would recreate this
+        // callback on every state flip, causing lastItemRef to reattach the IntersectionObserver
+        // and fire again in a tight loop.
+        if (loadingMoreRef.current) return;
+        // Check hasMore before any setState to prevent re-render when there's nothing to load
+        const hasMore = activeView === 'ttf' ? hasTtfNextPage : hasNextPage;
+        if (!hasMore) return;
+
+        loadingMoreRef.current = true;
         setIsLoadingMore(true);
         try {
             const email = await getUserEmail();
             if (activeView === 'ttf') {
-                if (!hasTtfNextPage) return;
                 const result = await fetchChatHistory(ttfHistoryOffset, 10, 'TTF', email);
                 setHistoryData(prev => [...prev, ...result.data]);
                 setHasTtfNextPage(result.hasNextPage);
                 setTtfHistoryOffset(prev => prev + 10);
             } else {
-                if (!hasNextPage) return;
                 const result = await fetchChatHistory(historyOffset, 10, 'CHAT', email);
                 setHistoryData(prev => [...prev, ...result.data]);
                 setHasNextPage(result.hasNextPage);
                 setHistoryOffset(prev => prev + 10);
             }
         } finally {
+            loadingMoreRef.current = false;
             setIsLoadingMore(false);
         }
-    }, [hasNextPage, isLoadingMore, historyOffset]);
+    }, [hasNextPage, hasTtfNextPage, historyOffset, ttfHistoryOffset, activeView, getUserEmail]);
 
     // Loads messages into both messages[] (old) and sessionChats (new)
     const loadChatMessages = useCallback(async (sid: string) => {
@@ -531,10 +539,13 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
         activeMessageIdRef.current = messageId;
         activeSessionIdRef.current = sid;
         setIsProcessing(true);
-        streamingServiceRef.current = getStreamingService(taskId);
-        streamingServiceRef.current.onMessage(handleStreamingMessage);
-        streamingServiceRef.current.onError(handleStreamingError);
-        streamingServiceRef.current.connect();
+        streamingServiceRef.current = getStreamingService();
+        streamingServiceRef.current.connect(
+            taskId,
+            handleStreamingMessage,
+            handleStreamingError,
+            () => setIsProcessing(false)
+        );
     }, [handleStreamingMessage, handleStreamingError]);
 
     const stopStreaming = useCallback(() => {
@@ -621,36 +632,27 @@ export const WingmanProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
             const result = await executeAgenticQuery(queryPayload, webContent || {});
 
-            if (result?.success && !result?.task_id) {
-                const finalData = result.data || result;
-                const inner = finalData?.result && typeof finalData.result === 'object'
-                    ? finalData.result
-                    : finalData;
-                const messageText = inner?.message || (typeof finalData === 'string' ? finalData : '');
-                const attachments = inner?.attachments || finalData?.attachments || [];
-                const metrics = inner?.metrics || finalData?.metrics || [];
-                const execution_summary = finalData?.execution_summary || inner?.execution_summary || null;
-                const datasets = finalData?.datasets || inner?.datasets || null;
-                const completedResult = JSON.stringify({
-                    status: 'completed', message: messageText,
-                    attachments, metrics, execution_summary, datasets
-                });
+            let resultData;
+            try {
+                resultData = typeof result?.result === 'string' ? JSON.parse(result.result) : result?.result;
+            } catch {
+                resultData = result?.result;
+            }
 
+            if (resultData && resultData.task_id && resultData.status === 'processing') {
+                startStreaming(resultData.task_id, assistantMessageId, targetSid);
+            } else if (result?.task_id) {
+                startStreaming(result.task_id, assistantMessageId, targetSid);
+            } else {
+                const rawResult = result?.result?.result || result?.result || result;
+                const resultString = typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult);
                 applyMessageUpdate(assistantMessageId, targetSid, {
                     status: 'completed',
-                    content: messageText,
-                    attachments,
-                    metrics,
-                    execution_summary,
-                    datasets,
-                    result: completedResult,
+                    content: rawResult?.message || '',
+                    attachments: rawResult?.attachments || result?.attachments || [],
+                    result: resultString,
                 });
                 setIsProcessing(false);
-            } else if (result?.task_id || result?.data?.task_id) {
-                const taskId = result?.task_id || result?.data?.task_id;
-                startStreaming(taskId, assistantMessageId, targetSid);
-            } else {
-                throw new Error('Invalid response from query engine');
             }
         } catch (error: any) {
             console.error('Error sending message:', error);
