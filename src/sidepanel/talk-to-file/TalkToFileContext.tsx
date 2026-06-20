@@ -1,21 +1,22 @@
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { uploadFileToLakehouse, insertChatMessage } from '../../api/wingman';
+import { uploadAQEDocuments } from '../../api/aqe';
+import { insertChatMessage } from '../../api/wingman';
+import { getUploadStreamingService, resetUploadStreamingService } from '../../api/uploadStreamingService';
 import { useWingman, NEW_CHAT_ID } from '../hooks/WingmanContext';
-
-const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 MB
 
 interface UploadedFile {
     name: string;
     size: number;
     type: string;
+    file: File;
     s3Path?: string;
 }
 
 interface TalkToFileContextType {
     uploadedFile: UploadedFile | null;
     isUploading: boolean;
-    handleFileUploadWithSession: (files: File[]) => Promise<void>;
+    handleFileUploadWithSession: (files: File | File[], forceNewSession?: boolean) => Promise<void>;
     clearUploadedFile: () => void;
 }
 
@@ -29,60 +30,112 @@ export const TalkToFileProvider = ({ children }: { children: ReactNode }) => {
 
     const clearUploadedFile = () => setUploadedFile(null);
 
-    const handleFileUploadWithSession = useCallback(async (files: File[]) => {
-        setIsUploading(true);
+    const handleFileUploadWithSession = useCallback(async (files: File | File[], forceNewSession = false) => {
         try {
-            const oversized = files.find(f => f.size > MAX_FILE_SIZE);
-            if (oversized) {
-                throw new Error(`${oversized.name} is too large. File size must be less than 2MB.`);
+            setIsUploading(true);
+
+            const fileArray = Array.isArray(files) ? files : [files];
+            const isMultiple = fileArray.length > 1;
+
+            let currentSessionId = activeTabId;
+
+            if (forceNewSession || !currentSessionId || currentSessionId === NEW_CHAT_ID) {
+                const result = await createTTFSession(fileArray[0].name);
+                currentSessionId = result.sessionId;
             }
 
-            let currentSessionId = (!activeTabId || activeTabId === NEW_CHAT_ID)
-                ? (await createTTFSession(files[0].name)).sessionId
-                : activeTabId;
-
             const uploadingMessageId = uuidv4();
-            addChatMessage(currentSessionId, {
+            addChatMessage(currentSessionId!, {
                 id: uploadingMessageId,
-                result: JSON.stringify({ status: 'uploading', fileCount: files.length, isMultiple: files.length > 1 }),
+                result: JSON.stringify({ status: 'uploading', fileCount: fileArray.length, isMultiple }),
             });
 
-            const uploadResponse = await uploadFileToLakehouse(files, currentSessionId);
+            // Response format: { task_id, status, files: [{ name, s3_key }] }
+            let uploadResponse: any;
+            try {
+                uploadResponse = await uploadAQEDocuments(fileArray, currentSessionId!);
+            } catch (uploadError: any) {
+                const detail = uploadError?.response?.data?.detail;
+                const errorMessage = typeof detail === 'string'
+                    ? detail
+                    : Array.isArray(detail)
+                    ? detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ')
+                    : uploadError?.message || 'Upload failed. Please try again.';
+                updateChatMessage(currentSessionId!, uploadingMessageId, {
+                    result: JSON.stringify({ message: errorMessage, error: true }),
+                });
+                return;
+            }
 
-            const s3Paths: string[] = [];
-            const successfulFiles: string[] = [];
-            (uploadResponse.executed_unstructured_files || []).forEach((f: any) => {
-                if (f.s3_path) { s3Paths.push(f.s3_path); successfulFiles.push(f.filename); }
-            });
+            const { task_id, files: uploadedFiles = [] } = uploadResponse;
+            const s3Keys: string[] = uploadedFiles.map((f: any) => f.s3_key).filter(Boolean);
+            const fileNames: string[] = uploadedFiles.map((f: any) => f.name).filter(Boolean);
 
-            const failedFiles: Array<{ filename: string; reason: string }> = [];
-            (uploadResponse.not_executed_files || []).forEach((f: any) => {
-                failedFiles.push({ filename: f.filename, reason: f.reason || 'Unknown error' });
-            });
+            if (uploadedFiles.length > 0) {
+                const successMessage = uploadedFiles.length === 1
+                    ? `${fileNames[0]} uploaded successfully`
+                    : `${uploadedFiles.length} files uploaded successfully`;
 
-            if (successfulFiles.length > 0) {
-                const successMessage = successfulFiles.length === 1
-                    ? 'File uploaded successfully'
-                    : `${successfulFiles.length} files uploaded successfully`;
-                const messageData = { message: successMessage, attachments: s3Paths };
-                updateChatMessage(currentSessionId, uploadingMessageId, { result: JSON.stringify(messageData) });
-                await insertChatMessage(currentSessionId, messageData);
+                const messageData = { message: successMessage, attachments: s3Keys };
+                updateChatMessage(currentSessionId!, uploadingMessageId, {
+                    result: JSON.stringify(messageData)
+                });
+                await insertChatMessage(currentSessionId!, messageData);
+
+                if (task_id) {
+                    const streamingMessageId = uuidv4();
+                    addChatMessage(currentSessionId!, {
+                        id: streamingMessageId,
+                        result: JSON.stringify({ status: 'thinking', message: '' }),
+                        created_on: new Date().toISOString(),
+                    });
+
+                    resetUploadStreamingService();
+                    const uploadService = getUploadStreamingService();
+
+                    uploadService.connect(
+                        task_id,
+                        (event) => {
+                            if (event.type === 'thinking') {
+                                updateChatMessage(currentSessionId!, streamingMessageId, {
+                                    result: JSON.stringify({ status: 'thinking', message: event.message })
+                                });
+                            } else if (event.type === 'complete') {
+                                updateChatMessage(currentSessionId!, streamingMessageId, {
+                                    result: event.chatMessage?.result,
+                                    attachments: event.chatMessage?.attachments,
+                                });
+                            }
+                        },
+                        (error) => {
+                            updateChatMessage(currentSessionId!, streamingMessageId, {
+                                result: JSON.stringify({
+                                    message: error.message || 'Upload processing failed',
+                                    error: true,
+                                }),
+                            });
+                        },
+                        () => { /* message already updated in onMessage */ }
+                    );
+                }
             } else {
-                updateChatMessage(currentSessionId, uploadingMessageId, {
-                    result: JSON.stringify({ message: 'All files failed to upload' }),
+                updateChatMessage(currentSessionId!, uploadingMessageId, {
+                    result: JSON.stringify({ message: 'Upload failed. Please try again.', error: true })
                 });
             }
 
-            for (const failed of failedFiles) {
-                const errorMsg = `Failed to upload "${failed.filename}": ${failed.reason}`;
-                const errorId = uuidv4();
-                addChatMessage(currentSessionId, { id: errorId, result: JSON.stringify({ message: errorMsg, error: true }) });
-                await insertChatMessage(currentSessionId, { message: errorMsg, error: true });
+            if (fileArray.length > 0) {
+                setUploadedFile({
+                    name: fileArray[0].name,
+                    size: fileArray[0].size,
+                    type: fileArray[0].type,
+                    file: fileArray[0],
+                    s3Path: s3Keys[0],
+                });
             }
-
-            if (files.length > 0) {
-                setUploadedFile({ name: files[0].name, size: files[0].size, type: files[0].type, s3Path: s3Paths[0] });
-            }
+        } catch (error) {
+            console.error('Error in file upload process:', error);
+            throw error;
         } finally {
             setIsUploading(false);
         }

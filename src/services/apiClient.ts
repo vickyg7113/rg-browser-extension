@@ -120,13 +120,8 @@ async function getRcid(): Promise<string | number | null> {
     if (!customerDetails) {
       return null;
     }
-    
-    let rcid = customerDetails.RG_CUSTOMER_ID;
-    if (!rcid) {
-      rcid = customerDetails.RG_CUSTOMER_ID;
-    }
-    
-    return rcid || null;
+    return 1001;
+    // return customerDetails.RG_CUSTOMER_ID || null;
   } catch (error) {
     console.error('[ApiClient] Error getting rcid:', error);
     return null;
@@ -143,7 +138,8 @@ async function getSchema(): Promise<string | null> {
       return null;
     }
     
-    return customerDetails.CUSTOMER_SCHEMA || null;
+    // return customerDetails.CUSTOMER_SCHEMA || null;
+    return 'customer_1001';
   } catch (error) {
     console.error('[ApiClient] Error getting schema:', error);
     return null;

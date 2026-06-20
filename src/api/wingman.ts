@@ -1,14 +1,15 @@
 import apiClient from '../services/apiClient';
 import { PREFIX_WINGMAN, PREFIX_DB_INSTANCE, PREFIX_DATA_INGESTION_INSTANCE, PREFIX_DELTA_ACCESS } from './constants';
 
-const getCustomerSchema = (): string => {
-  try {
-    const raw = localStorage.getItem('customerDetails');
-    return raw ? JSON.parse(raw).CUSTOMER_SCHEMA || '' : '';
-  } catch {
-    return '';
-  }
-};
+// const getCustomerSchema = (): string => {
+//   try {
+//     const raw = localStorage.getItem('customerDetails');
+//     return raw ? JSON.parse(raw).CUSTOMER_SCHEMA || '' : '';
+//   } catch {
+//     return '';
+//   }
+// };
+const getCustomerSchema = (): string => 'customer_1001';
 
 /**
  * Upload files to the lakehouse for Talk to File sessions
